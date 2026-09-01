@@ -1,0 +1,12 @@
+# runtime artifacts (live in kokoro/ next to the code)
+kokoro/venv/
+kokoro/*.onnx
+kokoro/*.bin
+kokoro/state
+kokoro/state.tmp
+kokoro/pending.txt
+kokoro/daemon.sock
+kokoro/daemon.log
+kokoro/notify_forward.json
+kokoro/__pycache__/
+.DS_Store

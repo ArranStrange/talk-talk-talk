@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""ktts — Talk Talk Talk client (controls the resident Kokoro daemon)
+
+  ktts say "text"      speak the given text (replaces anything currently playing)
+  ktts say -           speak text from stdin
+  ktts clip            speak the clipboard contents
+  ktts stop            stop speaking immediately
+  ktts pause           pause playback
+  ktts resume          resume paused playback
+  ktts toggle          pause if playing, resume if paused
+  ktts back [secs]     roll playback back (default 10s) and re-read
+  ktts status          idle / synthesizing / playing / paused
+  ktts quit            shut down the daemon (frees ~600 MB RAM; restarts on next use)
+
+Voice/speed via env: KOKORO_VOICE, KOKORO_SPEED, KOKORO_LANG
+Uses only the standard library; the daemon it launches runs in ./venv.
+"""
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
+SOCK_PATH = os.path.join(HERE, "daemon.sock")
+VENV_PYTHON = os.path.join(HERE, "venv", "bin", "python")
+
+
+def connect():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(SOCK_PATH)
+    return s
+
+
+def ensure_daemon():
+    try:
+        connect().close()
+        return
+    except OSError:
+        pass
+    if not os.path.exists(VENV_PYTHON):
+        sys.exit(f"venv missing at {VENV_PYTHON} — run install.sh first")
+    log = open(os.path.join(HERE, "daemon.log"), "ab")
+    subprocess.Popen(
+        [VENV_PYTHON, os.path.join(HERE, "daemon.py")],
+        stdout=log, stderr=log, start_new_session=True,
+    )
+    for _ in range(120):  # up to 30s for a cold start
+        time.sleep(0.25)
+        try:
+            connect().close()
+            return
+        except OSError:
+            continue
+    sys.exit("kokoro daemon failed to start; see daemon.log")
+
+
+def send(req):
+    ensure_daemon()
+    s = connect()
+    s.sendall(json.dumps(req).encode())
+    reply = json.loads(s.recv(1 << 16).decode())
+    s.close()
+    print(reply.get("msg", ""))
+    sys.exit(0 if reply.get("ok") else 1)
+
+
+def say(text):
+    send({
+        "cmd": "say",
+        "text": text,
+        "voice": os.environ.get("KOKORO_VOICE", "af_heart"),
+        "speed": float(os.environ.get("KOKORO_SPEED", "1.1")),
+        "lang": os.environ.get("KOKORO_LANG", "en-us"),
+    })
+
+
+def main():
+    args = sys.argv[1:]
+    cmd = args[0] if args else ""
+    if cmd == "say":
+        rest = args[1:]
+        if not rest or rest == ["-"]:
+            say(sys.stdin.read())
+        else:
+            say(" ".join(rest))
+    elif cmd == "clip":
+        text = subprocess.run(["pbpaste"], capture_output=True, text=True).stdout
+        say(text)
+    elif cmd == "back":
+        seconds = float(args[1]) if len(args) > 1 else 10.0
+        send({"cmd": "back", "seconds": seconds})
+    elif cmd in ("stop", "pause", "resume", "toggle", "status", "quit"):
+        if cmd in ("stop", "status", "quit"):
+            # don't boot a daemon just to ask it something / stop nothing
+            try:
+                connect().close()
+            except OSError:
+                print("idle" if cmd == "status" else "not running")
+                sys.exit(0)
+        send({"cmd": cmd})
+    else:
+        print(__doc__.strip())
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
