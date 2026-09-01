@@ -115,8 +115,24 @@ def split_chunks(text, max_len=300, first_max_len=100):
     return chunks
 
 
+FADE = int(0.015 * SR)      # 15ms edge fade per chunk: kills boundary clicks
+CHUNK_GAP = int(0.12 * SR)  # short natural pause between joined chunks
+
+
+def smooth_edges(samples):
+    """Fade a chunk's head and tail so joins are click-free."""
+    n = len(samples)
+    f = min(FADE, n // 4)
+    if f > 0:
+        ramp = np.linspace(0.0, 1.0, f, dtype=np.float32)
+        samples[:f] *= ramp
+        samples[-f:] *= ramp[::-1]
+    return samples
+
+
 def synth_worker(gen, text, voice, speed, lang):
     global buffer, buf_len, synth_done
+    first = True
     for chunk in split_chunks(text):
         with lock:
             if generation != gen:
@@ -125,7 +141,11 @@ def synth_worker(gen, text, voice, speed, lang):
             samples, _ = kokoro.create(chunk, voice=voice, speed=speed, lang=lang)
         except Exception:
             continue
-        samples = np.asarray(samples, dtype=np.float32)
+        samples = smooth_edges(np.asarray(samples, dtype=np.float32))
+        if not first:
+            samples = np.concatenate(
+                [np.zeros(CHUNK_GAP, dtype=np.float32), samples])
+        first = False
         n = len(samples)
         # grow (rare): build the bigger array outside the lock
         if buf_len + n > len(buffer):
