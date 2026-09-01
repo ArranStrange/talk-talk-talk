@@ -64,6 +64,8 @@ import sounddevice as sd
 from kokoro_onnx import Kokoro, EspeakConfig
 
 SR = 24000
+START_BUFFER = SR * 2       # buffer 2s of audio before playback begins
+RESUME_BUFFER = SR * 3 // 2 # after running dry, rebuild 1.5s before resuming
 
 ESPEAK_LIB, ESPEAK_DATA = find_espeak()
 kokoro = Kokoro(
@@ -144,6 +146,8 @@ def synth_worker(gen, text, voice, speed, lang):
 
 
 def make_callback(gen):
+    starved = [False]  # once dry, wait for RESUME_BUFFER before resuming
+
     def callback(outdata, frames, time_info, status):
         global cursor
         if status:
@@ -153,6 +157,18 @@ def make_callback(gen):
                 outdata.fill(0)
                 return
             avail = buf_len - cursor
+            if not synth_done:
+                if starved[0]:
+                    if avail >= RESUME_BUFFER:
+                        starved[0] = False
+                    else:
+                        outdata.fill(0)
+                        return
+                elif avail < frames:
+                    starved[0] = True
+                    print("buffer dry: waiting for synthesis", flush=True)
+                    outdata.fill(0)
+                    return
             n = min(frames, max(avail, 0))
             if n > 0:
                 outdata[:n, 0] = buffer[cursor:cursor + n]
@@ -185,9 +201,11 @@ def player_worker(gen):
         with lock:
             if generation != gen:
                 return
-            if buf_len > 0:
+            # start once a comfortable buffer exists (or the text is fully
+            # synthesized, whichever comes first)
+            if buf_len >= START_BUFFER or (synth_done and buf_len > 0):
                 break
-            if synth_done:  # synthesis produced nothing
+            if synth_done and buf_len == 0:  # synthesis produced nothing
                 return
         time.sleep(0.03)
     s = sd.OutputStream(
