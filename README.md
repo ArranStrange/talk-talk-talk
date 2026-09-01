@@ -31,7 +31,7 @@ macOS on Apple Silicon or Intel, [Homebrew](https://brew.sh), ~1 GB disk
 ## Install
 
 ```bash
-git clone https://github.com/YOURNAME/talk-talk-talk.git
+git clone https://github.com/ArranStrange/talk-talk-talk.git
 cd talk-talk-talk
 ./install.sh
 ```
