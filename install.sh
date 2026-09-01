@@ -106,6 +106,17 @@ Talk Talk Talk is installed. Remaining manual steps:
    (If notify was already set, copy its old value into
    <REPO>/kokoro/notify_forward.json as a JSON array to keep it working.)
 
+4. To stage Cursor responses, add to ~/.cursor/hooks.json:
+
+   {
+     "version": 1,
+     "hooks": {
+       "afterAgentResponse": [
+         { "command": "<REPO>/kokoro/cursor_notify.py" }
+       ]
+     }
+   }
+
 Hotkeys: ⌃⌥S speak selection · ⌃⌥P play/pause · ⌃⌥← rewind ·
          ⌃⌥X stop · ⌃⌥A auto-read toggle
 ────────────────────────────────────────────────────────────────────────

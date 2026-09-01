@@ -1,8 +1,8 @@
 # Talk Talk Talk 🗣
 
 Local, free text-to-speech for your Mac — with a floating status pill,
-global hotkeys, and automatic read-aloud of **Claude Code** and **Codex CLI**
-responses. Everything runs on-device using the open-weights
+global hotkeys, and automatic read-aloud of **Claude Code**, **Codex CLI**,
+and **Cursor** responses. Everything runs on-device using the open-weights
 [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) model: no API, no
 account, no network calls after install.
 
@@ -12,9 +12,9 @@ account, no network calls after install.
 - **A floating pill** with live state (loading / preparing / speaking /
   paused / replied), an animated waveform while speaking, and clickable
   AUTO / rewind / pause / stop buttons. Drag it anywhere; it remembers.
-- **Agent responses read aloud** — when Claude Code or Codex finishes a
-  response, the pill pops up with a play button, or speaks immediately in
-  auto mode (`⌃⌥A`)
+- **Agent responses read aloud** — when Claude Code, Codex, or Cursor
+  finishes a response, the pill pops up with a play button, or speaks
+  immediately in auto mode (`⌃⌥A`)
 - **Real transport controls** — instant pause/resume (sample-exact) and
   10-second rollback to re-hear a section (`⌃⌥←`)
 - **Dictation-aware** — hold-Fn dictation tools (e.g. Wispr Flow) auto-pause
@@ -82,6 +82,7 @@ and `bm_george` are good starting points. See the
 ```
 Claude Code Stop hook ──┐
 Codex notify hook ──────┤  stage text →  pending.txt + state file
+Cursor afterAgentResponse ┤
                         │
 ktts (CLI / hotkeys) ───┤  unix socket
                         ▼

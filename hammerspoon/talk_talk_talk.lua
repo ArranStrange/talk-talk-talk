@@ -54,7 +54,7 @@ local LABELS = {
   synthesizing = "Preparing…",
   playing      = "Speaking",
   paused       = "Paused",
-  ready        = "Claude replied",
+  ready        = "Agent replied",
 }
 
 local pill = nil
