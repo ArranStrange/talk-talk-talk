@@ -64,6 +64,8 @@ local autoRead = hs.settings.get("tttAutoRead") or false
 local autoPlayFired = false
 local fnHeld = false        -- Fn key currently down (dictation)
 local fnAutoPaused = false  -- we paused because of Fn, so we may auto-resume
+local pillHidden = false    -- ✕ clicked: stay hidden until the next event
+local lastSeenState = "idle"
 
 local function playPending()
   hs.task.new("/bin/sh", nil,
@@ -138,10 +140,17 @@ local function buildPill()
                text = "⏪\u{FE0E}", textSize = 18, textAlignment = "center",
                textColor = { red = 1, green = 1, blue = 1, alpha = 0.95 },
                trackMouseDown = true, id = "back" }
+  pill[13] = { type = "text", frame = { x = 0, y = 8, w = 22, h = 20 },
+               text = "✕", textSize = 13, textAlignment = "center",
+               textColor = { red = 1, green = 1, blue = 1, alpha = 0.45 },
+               trackMouseDown = true, id = "close" }
   pill:mouseCallback(function(_, event, id)
     if event ~= "mouseDown" then return end
     if id == "auto" then
       toggleAutoRead()
+    elseif id == "close" then
+      pillHidden = true
+      pill:hide(0.15)
     elseif id == "back" then
       ktts("back")
     elseif id == "toggle" then
@@ -185,15 +194,17 @@ local function layoutPill(st)
     cw = math.floor(#(LABELS[st] or st) * 7.2) + 8
   end
   local autoX = 36 + cw + 4
-  local backX = autoX + 46
-  local togX  = backX + 30
-  local stopX = togX + 32
-  local w     = stopX + 32 + 10
+  local backX  = autoX + 46
+  local togX   = backX + 30
+  local stopX  = togX + 32
+  local closeX = stopX + 30
+  local w      = closeX + 22 + 8
   pill[3].frame  = { x = 36, y = 8, w = cw, h = 20 }
   pill[6].frame  = { x = autoX, y = 11, w = 42, h = 16 }
   pill[12].frame = { x = backX, y = 6, w = 30, h = 26 }
   pill[4].frame  = { x = togX, y = 5, w = 32, h = 26 }
   pill[5].frame  = { x = stopX, y = 5, w = 32, h = 26 }
+  pill[13].frame = { x = closeX, y = 8, w = 22, h = 20 }
   local f = pill:frame()
   pill:frame({ x = f.x + (f.w - w), y = f.y, w = w, h = f.h })
 end
@@ -209,10 +220,22 @@ end
 local function updatePill()
   local st = readState()
   currentState = (st == "") and "idle" or st
+  -- a genuinely new event (fresh reply or new speech) un-hides the pill
+  if pillHidden and st ~= lastSeenState
+     and (st == "ready" or st == "synthesizing") then
+    pillHidden = false
+  end
+  lastSeenState = currentState
   if readyTimer then readyTimer:stop() readyTimer = nil end
   if currentState == "idle" then
+    pillHidden = false
     if waveTimer then waveTimer:stop() waveTimer = nil end
     if pill then pill:hide(0.2) end
+    return
+  end
+  if pillHidden then
+    if waveTimer then waveTimer:stop() waveTimer = nil end
+    if pill then pill:hide(0.15) end
     return
   end
   if not pill then buildPill() end
