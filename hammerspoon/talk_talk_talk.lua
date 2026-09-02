@@ -2,7 +2,7 @@
 -- Installed by install.sh (which fills in the kokoro directory below),
 -- then loaded from ~/.hammerspoon/init.lua via: require("talk_talk_talk")
 --
--- TLDR is a switch (⌃⌥T, or the pill's TL;DR button): when it is on, text
+-- TL;DR is a switch (⌃⌥T, or the pill's TL;DR button): when it is on, text
 -- over tldr_min_words is summarised before being read. Where the text lands
 -- is chosen by the shortcut, not by a mode.
 --
@@ -10,7 +10,7 @@
 --   ⌃⌥S  speak the selection       ⌃⌥R  selection in the reader
 --   ⌃⌥P  speak the reply / pause   ⌃⌥X  cancel / dismiss / stop
 --   ⌃⌥←  rewind 10s                ⌃⌥A  auto-read on/off
---   ⌃⌥T  TLDR on/off
+--   ⌃⌥T  TL;DR on/off
 
 local KOKORO_DIR = "@@KOKORO_DIR@@"
 local KTTS = KOKORO_DIR .. "/ktts"
@@ -975,11 +975,9 @@ local function buildMenu()
 
   -- 2. the switches worth reaching for first --------------------------------
   sep()
-  add({ title = "Auto-read AI Responses", checked = autoRead,
-        fn = toggleAutoRead })
-  add({ title = "TLDR — summarise before reading",
-        checked = tcfg.tldr_replies == true, fn = toggleTldr })
-  add({ title = "Bring pill to front", fn = bringPillToFront })
+  add({ title = "Auto-read", checked = autoRead, fn = toggleAutoRead })
+  add({ title = "TL;DR", checked = tcfg.tldr_replies == true, fn = toggleTldr })
+  add({ title = "Bring To Front", fn = bringPillToFront })
 
   -- 3. acting on what is happening right now --------------------------------
   sep()
@@ -1132,7 +1130,7 @@ local function buildMenu()
     end
   end })
 
-  add({ title = "TLDR options", menu = tldrMenu })
+  add({ title = "TL;DR options", menu = tldrMenu })
 
   -- 7. voice -----------------------------------------------------------------
   sep()
