@@ -27,13 +27,13 @@ account, no network calls after install.
 - **TLDR mode** — toggle it on and agent replies are summarised before they
   are read, via the Claude CLI (no key needed), the Claude or ChatGPT API
   (your key, kept in the Keychain), or a local no-AI extractive summariser.
-  `⌃⌥T` speaks a summary (with read-along), `⌃⌥⇧T` puts it in the reader, and
-  the pill's TL;DR button speaks it. Each summarises the staged reply if one
-  is waiting, otherwise your current selection.
-- **Silent RSVP reader** (`⌃⌥R`) — select text and read it word-by-word with
-  no audio at all. Dims the whole screen down to a single centred word with
-  its anchor letter pinned; hold `R` to advance, release to hold. Speed and
-  position live in the menu bar so nothing competes with the word.
+  It is a switch (`⌃⌥T`, or the pill's TL;DR button), not a separate command:
+  turn it on and everything you read gets summarised first.
+- **Reader mode** (`⌃⌥R`) — another switch: instead of speaking, text goes to
+  a silent full-screen reader that dims the whole screen down to a single
+  centred word with its anchor letter pinned. Hold `R` to advance, release to
+  hold. Speed and position live in the menu bar so nothing competes with the
+  word.
 - **Dictation-aware** — hold-Fn dictation tools (e.g. Wispr Flow) auto-pause
   speech while you talk and resume when you release
 - **54 voices** across 9 languages, all local — pick one from the menu bar
@@ -71,9 +71,20 @@ Claude Code / Codex if you want agent responses staged.
 | `⌃⌥←` | — | rewind 10 s |
 | `⌃⌥X` | dismiss staged reply | stop |
 | `⌃⌥A` | toggle auto-read | toggle auto-read |
-| `⌃⌥R` | silent RSVP reader on the selection (hold `R` to read, `↑↓` speed, `←→` step, `esc` close) ||
-| `⌃⌥T` | TLDR, spoken aloud with read-along ||
-| `⌃⌥⇧T` | TLDR, in the full-screen RSVP reader ||
+| `⌃⌥T` | TLDR on/off ||
+| `⌃⌥R` | reader mode on/off ||
+
+Two switches decide what `⌃⌥S` and `⌃⌥P` actually do, so there is one key
+per action rather than one per combination:
+
+| TLDR | Reader mode | Result |
+|---|---|---|
+| off | off | speaks the text |
+| **on** | off | speaks a summary |
+| off | **on** | shows the text in the full-screen reader |
+| **on** | **on** | shows a summary in the reader |
+
+In the reader: hold `R` to advance, `↑↓` speed, `←→` step a word, `esc` close.
 
 ## CLI
 
