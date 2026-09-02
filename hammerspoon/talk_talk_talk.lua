@@ -449,11 +449,15 @@ local rHeld = false
 local rHoldStart = 0
 local readerWpm = hs.settings.get("tttReaderWpm") or 350
 
+local chipHold = nil        -- timer: how long the speed chip stays solid
+local chipFade = nil        -- timer: the fade itself
 local R_ORP_X = 0.42        -- fixation point, as a fraction of screen width
 local R_SIZE = 64
 local DIM = { red = 0.02, green = 0.02, blue = 0.03, alpha = 0.94 }
 
 local function closeReader()
+  if chipHold then chipHold:stop() chipHold = nil end
+  if chipFade then chipFade:stop() chipFade = nil end
   if readerTimer then readerTimer:stop() readerTimer = nil end
   if readerTap then readerTap:stop() readerTap = nil end
   if reader then reader:delete() reader = nil end
@@ -505,6 +509,45 @@ local function renderReaderWord()
   reader[3].frame = { x = anchorX - 1, y = midY + size * 0.62, w = 2, h = 14 }
   reader[5].frame = { x = 0, y = f.h - 3,
                       w = f.w * (readerIndex / math.max(#readerWords, 1)), h = 3 }
+end
+
+local CHIP_BG = { red = 0.13, green = 0.13, blue = 0.15 }
+
+local function showSpeedChip()
+  if not reader then return end
+  local f = reader:frame()
+  local w, h = 116, 34
+  local x, y = (f.w - w) / 2, f.h - 110
+  reader[6].frame = { x = x, y = y, w = w, h = h }
+  reader[6].action = "fill"
+  reader[6].fillColor = { red = CHIP_BG.red, green = CHIP_BG.green,
+                          blue = CHIP_BG.blue, alpha = 0.85 }
+  reader[7].frame = { x = x, y = y + 8, w = w, h = 20 }
+  reader[7].action = "fill"
+  reader[7].text = readerWpm .. " wpm"
+  reader[7].textColor = { white = 1, alpha = 0.85 }
+
+  if chipHold then chipHold:stop() end
+  if chipFade then chipFade:stop() chipFade = nil end
+  chipHold = hs.timer.doAfter(0.9, function()
+    chipHold = nil
+    local step = 0
+    chipFade = hs.timer.doEvery(0.035, function()
+      step = step + 1
+      local a = 1 - step / 12
+      if not reader or a <= 0 then
+        if chipFade then chipFade:stop() chipFade = nil end
+        if reader then
+          reader[6].action = "skip"
+          reader[7].action = "skip"
+        end
+        return
+      end
+      reader[6].fillColor = { red = CHIP_BG.red, green = CHIP_BG.green,
+                              blue = CHIP_BG.blue, alpha = 0.85 * a }
+      reader[7].textColor = { white = 1, alpha = 0.85 * a }
+    end)
+  end)
 end
 
 local function advance()
@@ -567,6 +610,14 @@ local function buildReader()
   reader[5] = { type = "rectangle", action = "fill",
                 frame = { x = 0, y = f.h - 3, w = 0, h = 3 },
                 fillColor = { red = 1, green = 0.36, blue = 0.30, alpha = 0.85 } }
+  -- speed chip: hidden until a speed key is pressed, then fades out again
+  reader[6] = { type = "rectangle", action = "skip",
+                roundedRectRadii = { xRadius = 17, yRadius = 17 },
+                frame = { x = 0, y = 0, w = 116, h = 34 },
+                fillColor = { red = 0.13, green = 0.13, blue = 0.15, alpha = 0 } }
+  reader[7] = { type = "text", action = "skip", text = "", textSize = 14,
+                frame = { x = 0, y = 0, w = 116, h = 20 },
+                textAlignment = "center", textColor = { white = 1, alpha = 0 } }
   reader:show(0.12)
 end
 
@@ -593,12 +644,12 @@ local function startReaderTap()
       elseif (key == "up" or key == "=") and down then
         readerWpm = math.min(1200, readerWpm + 25)
         hs.settings.set("tttReaderWpm", readerWpm)
-        hs.alert.show(readerWpm .. " wpm", 0.6)
+        showSpeedChip()
         return true
       elseif (key == "down" or key == "-") and down then
         readerWpm = math.max(100, readerWpm - 25)
         hs.settings.set("tttReaderWpm", readerWpm)
-        hs.alert.show(readerWpm .. " wpm", 0.6)
+        showSpeedChip()
         return true
       elseif key == "left" and down then
         readerIndex = math.max(1, readerIndex - 1)
