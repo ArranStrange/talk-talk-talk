@@ -2,15 +2,15 @@
 -- Installed by install.sh (which fills in the kokoro directory below),
 -- then loaded from ~/.hammerspoon/init.lua via: require("talk_talk_talk")
 --
--- Two switches govern what happens, both in the menu bar:
---   TLDR         summarise the text first
---   Reader mode  show it in the full-screen reader instead of speaking it
+-- TLDR is a switch (⌃⌥T, or the pill's TL;DR button): when it is on, text
+-- is summarised before being read. Where the text lands is chosen by the
+-- shortcut, not by a mode.
 --
 -- Hotkeys:
---   ⌃⌥S  read selection            ⌃⌥P  read the reply / pause / resume
---   ⌃⌥←  rewind 10s                ⌃⌥X  dismiss / stop
---   ⌃⌥A  auto-read on/off          ⌃⌥T  TLDR on/off
---   ⌃⌥R  reader mode on/off
+--   ⌃⌥S  speak the selection       ⌃⌥R  selection in the reader
+--   ⌃⌥P  speak the reply / pause   ⌃⌥X  cancel / dismiss / stop
+--   ⌃⌥←  rewind 10s                ⌃⌥A  auto-read on/off
+--   ⌃⌥T  TLDR on/off
 
 local KOKORO_DIR = "@@KOKORO_DIR@@"
 local KTTS = KOKORO_DIR .. "/ktts"
@@ -53,6 +53,7 @@ local COLORS = {
   playing      = { red = 0.25, green = 0.80, blue = 0.35, alpha = 1 },
   paused       = { red = 0.95, green = 0.85, blue = 0.20, alpha = 1 },
   ready        = { red = 0.35, green = 0.55, blue = 0.95, alpha = 1 },
+  summarising  = { red = 0.62, green = 0.45, blue = 0.95, alpha = 1 },
 }
 local LABELS = {
   loading      = "Loading model…",
@@ -60,6 +61,7 @@ local LABELS = {
   playing      = "Speaking",
   paused       = "Paused",
   ready        = "Agent replied",
+  summarising  = "Summarising…",
 }
 
 local PENDING_FILE = KOKORO_DIR .. "/pending.txt"
@@ -73,9 +75,6 @@ local fnAutoPaused = false  -- we paused because of Fn, so we may auto-resume
 local pillHidden = false    -- ✕ clicked: stay hidden until the next event
 local lastSeenState = "idle"
 local rsvpOn = hs.settings.get("tttRsvp") or false
--- Reader mode: send text to the full-screen reader instead of speaking it.
--- Orthogonal to TLDR mode (summarise first), which lives in config.json.
-local readerMode = hs.settings.get("tttReaderMode") or false
 local WORD_FILE = KOKORO_DIR .. "/word"
 local PILL_H, DRAWER_H = 36, 92
 -- ORP (optimal recognition point): the letter the eye fixates on. Held at
@@ -118,55 +117,72 @@ local function tldrEnabled()
   return readCfg().tldr_replies == true
 end
 
--- Deliver text according to the two switches: TLDR mode decides whether it
--- is summarised first, reader mode decides whether it is shown or spoken.
-local function deliver(text)
+-- TLDR mode decides whether the text is summarised first; the caller
+-- decides where it lands, so each shortcut owns its own destination.
+local function deliver(text, destination)
   if not text or #text == 0 then return end
-  if readerMode then
+  if destination == "reader" then
     if tttReadText then tttReadText(text) end
   else
     ktts("say", text)
   end
 end
 
-local function deliverFile(path)
+local function writeState(st)
+  local f = io.open(STATE_FILE, "w")
+  if f then f:write(st) f:close() end
+end
+
+-- Summarising can take tens of seconds. Showing it on the pill rather than
+-- in a transient alert means the wait is visible for its whole duration,
+-- and the stop button can call it off.
+tldrTask = nil
+
+local function cancelSummarise()
+  if tldrTask then
+    tldrTask:terminate()
+    tldrTask = nil
+  end
+  tldrRunning = false
+  writeState("idle")
+end
+
+local function deliverFile(path, destination)
   if not tldrEnabled() then
     hs.task.new("/bin/sh", function(code, stdout)
-      deliver((stdout or ""):gsub("%s+$", ""))
+      deliver((stdout or ""):gsub("%s+$", ""), destination)
     end, { "-c", "cat '" .. path .. "'" }):start()
     return
   end
-  if tldrRunning then
-    hs.alert.show("Already summarising…", 1)
-    return
-  end
+  if tldrRunning then return end
   tldrRunning = true
-  hs.alert.show("Summarising…", 1.5)
-  hs.task.new("/bin/sh", function(code, stdout, stderr)
+  writeState("summarising")
+  tldrTask = hs.task.new("/bin/sh", function(code, stdout, stderr)
     tldrRunning = false
+    tldrTask = nil
     local summary = (stdout or ""):gsub("^%s+", ""):gsub("%s+$", "")
     if code ~= 0 or #summary == 0 then
+      writeState("idle")
       hs.alert.show("TLDR failed: " .. ((stderr or ""):gsub("%s+$", "")), 4)
       return
     end
-    deliver(summary)
-  end, { "-c", "'" .. TLDR_SCRIPT .. "' < '" .. path .. "'" }):start()
+    deliver(summary, destination)
+  end, { "-c", "'" .. TLDR_SCRIPT .. "' < '" .. path .. "'" })
+  tldrTask:start()
 end
 
-playPending = function()
-  deliverFile(PENDING_FILE)
+playPending = function(destination)
+  deliverFile(PENDING_FILE, destination)
 end
 
 -- Exposed for scripts and tests.
-tttReadReply = function() deliverFile(PENDING_FILE) end
-tttSetModes = function(tldr, reader)
-  local c = readCfg(); c.tldr_replies = tldr; writeCfg(c)
-  readerMode = reader
-  hs.settings.set("tttReaderMode", reader)
+tttReadReply = function(dest) deliverFile(PENDING_FILE, dest) end
+tttSetTldr = function(on)
+  local c = readCfg(); c.tldr_replies = on; writeCfg(c)
 end
 
--- Read whatever is selected, through the same two switches.
-local function readSelection()
+-- Read whatever is selected: TLDR applies if on, destination is the caller's.
+local function readSelection(destination)
   local previous = hs.pasteboard.getContents()
   local changeCount = hs.pasteboard.changeCount()
   hs.eventtap.keyStroke({ "cmd" }, "c")
@@ -184,7 +200,7 @@ local function readSelection()
     if not f then hs.alert.show("Could not stage the selection") return end
     f:write(selection)
     f:close()
-    deliverFile(SELECTION_FILE)
+    deliverFile(SELECTION_FILE, destination)
   end)
 end
 
@@ -213,13 +229,6 @@ local function toggleTldr()
   if pill then
     pill[18].textColor = c.tldr_replies and AUTO_ON or AUTO_OFF
   end
-end
-
-local function toggleReaderMode()
-  readerMode = not readerMode
-  hs.settings.set("tttReaderMode", readerMode)
-  hs.alert.show(readerMode and "Reader mode: ON (shows instead of speaking)"
-                            or "Reader mode: OFF (speaks)")
 end
 
 local function toggleRsvp()
@@ -319,9 +328,12 @@ local function buildPill()
     elseif id == "back" then
       ktts("back")
     elseif id == "toggle" then
-      if currentState == "ready" then playPending() else ktts("toggle") end
+      if currentState == "ready" then playPending("speak")
+      else ktts("toggle") end
     elseif id == "stop" then
-      if currentState == "ready" then dismissReady() else ktts("stop") end
+      if currentState == "summarising" then cancelSummarise()
+      elseif currentState == "ready" then dismissReady()
+      else ktts("stop") end
     elseif id == "bg" then
       -- drag to reposition; remember where it lands
       local mouse = hs.mouse.absolutePosition()
@@ -876,6 +888,7 @@ local menubar = nil
 
 local MENU_COLORS = {
   idle         = { white = 0.55, alpha = 1 },
+  summarising  = { red = 0.62, green = 0.45, blue = 0.95, alpha = 1 },
   loading      = { red = 0.95, green = 0.60, blue = 0.10, alpha = 1 },
   synthesizing = { red = 0.95, green = 0.60, blue = 0.10, alpha = 1 },
   playing      = { red = 0.20, green = 0.72, blue = 0.32, alpha = 1 },
@@ -883,7 +896,7 @@ local MENU_COLORS = {
   ready        = { red = 0.30, green = 0.50, blue = 0.95, alpha = 1 },
 }
 local MENU_GLYPH = {
-  idle = "◍", loading = "◐", synthesizing = "◐",
+  idle = "◍", loading = "◐", synthesizing = "◐", summarising = "◓",
   playing = "◉", paused = "◑", ready = "◈",
 }
 
@@ -904,7 +917,8 @@ local function buildMenu()
 
   local statusText = ({ idle = "Idle", loading = "Loading model…",
                         synthesizing = "Preparing…", playing = "Speaking",
-                        paused = "Paused", ready = "Reply ready" })[st] or st
+                        paused = "Paused", ready = "Reply ready",
+                        summarising = "Summarising…" })[st] or st
   table.insert(items, { title = statusText, disabled = true })
   table.insert(items, { title = "-" })
 
@@ -923,7 +937,10 @@ local function buildMenu()
                           fn = function() ktts("stop") end })
   end
   table.insert(items, { title = "-" })
-  table.insert(items, { title = "Read selection", fn = readSelection })
+  table.insert(items, { title = "Speak selection",
+                        fn = function() readSelection("speak") end })
+  table.insert(items, { title = "Selection → reader",
+                        fn = function() readSelection("reader") end })
   table.insert(items, { title = "Read clipboard", fn = function()
     local clip = hs.pasteboard.getContents()
     if not clip or #clip == 0 then hs.alert.show("Clipboard is empty") return end
@@ -972,15 +989,18 @@ local function buildMenu()
     fn = toggleTldr,
   })
   table.insert(items, {
-    title = "Reader mode — show instead of speaking",
-    checked = readerMode,
-    fn = toggleReaderMode,
+    title = "Speak the last reply",
+    disabled = currentState ~= "ready",
+    fn = function() playPending("speak") end,
   })
   table.insert(items, {
-    title = "Read the last reply",
-    disabled = tldrRunning or currentState ~= "ready",
-    fn = playPending,
+    title = "Last reply → reader",
+    disabled = currentState ~= "ready",
+    fn = function() playPending("reader") end,
   })
+  if currentState == "summarising" then
+    table.insert(items, { title = "Cancel summarising", fn = cancelSummarise })
+  end
 
   local PROVIDERS = {
     { "claude-cli", "Claude Code CLI (no key, uses your plan)" },
@@ -1119,7 +1139,7 @@ local function buildMenu()
   table.insert(items, { title = "Hotkeys…", fn = function()
     hs.alert.show("⌃⌥S read selection\n⌃⌥P read reply / pause\n"
       .. "⌃⌥← rewind 10s\n⌃⌥X stop\n⌃⌥A auto-read\n"
-      .. "⌃⌥T TLDR on/off · ⌃⌥R reader mode on/off\n"
+      .. "⌃⌥T TLDR on/off (applies to both)\n"
       .. "   in the reader: hold R to read · ↑↓ speed\n"
       .. "   ←→ step a word · esc close", 6)
   end })
@@ -1142,16 +1162,18 @@ if menubar then
 end
 
 -- Hotkeys (bound last so they can see the pill state helpers above)
-hs.hotkey.bind({ "ctrl", "alt" }, "s", readSelection)
+hs.hotkey.bind({ "ctrl", "alt" }, "s", function() readSelection("speak") end)
 hs.hotkey.bind({ "ctrl", "alt" }, "p", function()
-  if currentState == "ready" then playPending() else ktts("toggle") end
+  if currentState == "ready" then playPending("speak") else ktts("toggle") end
 end)
 hs.hotkey.bind({ "ctrl", "alt" }, "x", function()
-  if currentState == "ready" then dismissReady() else ktts("stop") end
+  if currentState == "summarising" then cancelSummarise()
+  elseif currentState == "ready" then dismissReady()
+  else ktts("stop") end
 end)
 hs.hotkey.bind({ "ctrl", "alt" }, "a", toggleAutoRead)
 hs.hotkey.bind({ "ctrl", "alt" }, "left", function() ktts("back") end)
-hs.hotkey.bind({ "ctrl", "alt" }, "r", toggleReaderMode)
+hs.hotkey.bind({ "ctrl", "alt" }, "r", function() readSelection("reader") end)
 hs.hotkey.bind({ "ctrl", "alt" }, "t", toggleTldr)
 
 -- Auto-pause while dictating with Wispr Flow (hold-Fn): pause speech when

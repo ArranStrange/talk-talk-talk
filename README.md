@@ -28,9 +28,10 @@ account, no network calls after install.
   are read, via the Claude CLI (no key needed), the Claude or ChatGPT API
   (your key, kept in the Keychain), or a local no-AI extractive summariser.
   It is a switch (`⌃⌥T`, or the pill's TL;DR button), not a separate command:
-  turn it on and everything you read gets summarised first.
-- **Reader mode** (`⌃⌥R`) — another switch: instead of speaking, text goes to
-  a silent full-screen reader that dims the whole screen down to a single
+  turn it on and everything you read gets summarised first, whether you send
+  it to speech or to the reader.
+- **Silent reader** (`⌃⌥R`) — sends the selection to a full-screen reader
+  instead of speaking it, dimming the whole screen down to a single
   centred word with its anchor letter pinned. Hold `R` to advance, release to
   hold. Speed and position live in the menu bar so nothing competes with the
   word.
@@ -71,18 +72,14 @@ Claude Code / Codex if you want agent responses staged.
 | `⌃⌥←` | — | rewind 10 s |
 | `⌃⌥X` | dismiss staged reply | stop |
 | `⌃⌥A` | toggle auto-read | toggle auto-read |
-| `⌃⌥T` | TLDR on/off ||
-| `⌃⌥R` | reader mode on/off ||
+| `⌃⌥R` | read the selection in the full-screen reader ||
+| `⌃⌥T` | TLDR on/off — applies to both ||
 
-Two switches decide what `⌃⌥S` and `⌃⌥P` actually do, so there is one key
-per action rather than one per combination:
-
-| TLDR | Reader mode | Result |
-|---|---|---|
-| off | off | speaks the text |
-| **on** | off | speaks a summary |
-| off | **on** | shows the text in the full-screen reader |
-| **on** | **on** | shows a summary in the reader |
+The shortcut chooses where the text goes; TLDR only decides whether it is
+summarised on the way. With TLDR on, the pill shows **Summarising…** for as
+long as the provider takes, and `⌃⌥X` (or the pill's stop button) calls it
+off — so a slow provider is visible and interruptible rather than a silent
+wait.
 
 In the reader: hold `R` to advance, `↑↓` speed, `←→` step a word, `esc` close.
 

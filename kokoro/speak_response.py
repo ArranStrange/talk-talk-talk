@@ -78,6 +78,15 @@ def maybe_summarise(text):
         return text
     if len(text.split()) < 40:
         return text  # not worth summarising
+    # Surface the wait: a provider can take tens of seconds, and without
+    # this the pill stays blank and the delay looks like nothing happening.
+    try:
+        tmp = os.path.join(HERE, "state.tmp")
+        with open(tmp, "w") as f:
+            f.write("summarising")
+        os.replace(tmp, os.path.join(HERE, "state"))
+    except OSError:
+        pass
     try:
         out = subprocess.run(
             [os.path.join(HERE, "tldr.py")],
