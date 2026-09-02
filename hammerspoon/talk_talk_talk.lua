@@ -11,6 +11,9 @@
 --   ⌃⌥P  speak the reply / pause   ⌃⌥X  cancel / dismiss / stop
 --   ⌃⌥←  rewind 10s                ⌃⌥A  auto-read on/off
 --   ⌃⌥T  TL;DR on/off
+--
+-- tttPillFacts() reports the pill's state, position and visibility, which
+-- is the quickest way to answer "why can I not see it".
 
 local KOKORO_DIR = "@@KOKORO_DIR@@"
 local KTTS = KOKORO_DIR .. "/ktts"
@@ -327,6 +330,7 @@ local function buildPill()
                text = "TL;DR", textSize = 10, textAlignment = "center",
                textColor = tldrEnabled() and AUTO_ON or AUTO_OFF,
                trackMouseDown = true, id = "tldr" }
+  tttPillDiag = pill
   pill:mouseCallback(function(_, event, id)
     if event ~= "mouseDown" then return end
     if id == "auto" then
@@ -432,7 +436,10 @@ local function bringPillToFront()
   local x, y = scr.x + scr.w - f.w - 14, scr.y + 10
   pill:topLeft({ x = x, y = y })
   hs.settings.set("tttPillPos", { x = x, y = y })
-  pill:level(hs.canvas.windowLevels.overlay)
+  -- Recovery has to win outright: the ordinary overlay level can sit behind
+  -- a full-screen app, which is exactly when someone goes looking for the
+  -- pill and concludes it is gone.
+  pill:level(hs.canvas.windowLevels.screenSaver)
   pill:behavior({ "canJoinAllSpaces", "stationary" })
 
   if currentState == "idle" then
@@ -442,18 +449,39 @@ local function bringPillToFront()
     pill[3].text = "Idle"
     for i = 0, WAVE_BARS - 1 do pill[7 + i].action = "skip" end
     pill:show(0.15)
-    hs.timer.doAfter(3, function()
-      if pill and currentState == "idle" then pill:hide(0.4) end
+    -- Long enough to actually find: three seconds is gone by the time the
+    -- menu has closed and your eye has moved.
+    hs.timer.doAfter(10, function()
+      if pill and currentState == "idle" then pill:hide(0.6) end
     end)
   else
     if updatePillRef then updatePillRef() end
     pill:show(0.15)
   end
-  hs.alert.show("Pill moved to the top right", 1.2)
+  hs.alert.show("Pill is at the top right", 2)
 end
 
 -- Exposed so it can be reached even if the menu bar item is the thing lost.
 tttBringPillToFront = bringPillToFront
+tttPillFacts = function()
+  local parts = {}
+  table.insert(parts, "state=" .. tostring(currentState))
+  table.insert(parts, "pillHidden=" .. tostring(pillHidden))
+  table.insert(parts, "rsvpOn=" .. tostring(rsvpOn))
+  local sp = hs.settings.get("tttPillPos")
+  table.insert(parts, "savedPos=" .. (sp and (math.floor(sp.x) .. "," .. math.floor(sp.y)) or "none"))
+  if tttPillDiag then
+    local f = tttPillDiag:frame()
+    table.insert(parts, string.format("frame=%.0f,%.0f %.0fx%.0f showing=%s",
+      f.x, f.y, f.w, f.h, tostring(tttPillDiag:isShowing())))
+  else
+    table.insert(parts, "pill=nil")
+  end
+  local mf = hs.screen.mainScreen():frame()
+  local ff = hs.screen.mainScreen():fullFrame()
+  table.insert(parts, string.format("frame.y=%.0f fullFrame.y=%.0f", mf.y, ff.y))
+  return table.concat(parts, "  ")
+end
 
 local function readWord()
   local f = io.open(WORD_FILE, "r")
