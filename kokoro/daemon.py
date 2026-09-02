@@ -71,16 +71,42 @@ def set_state(state):
 set_state("loading")
 
 import numpy as np
+import onnxruntime as ort
 import sounddevice as sd
 from kokoro_onnx import Kokoro, EspeakConfig
 
+
+def synth_threads():
+    """Performance cores, capped at 8. Measured on an M4 Pro: 8 threads
+    gives ~3.2x realtime vs ~2.4x for onnxruntime's default, while 10+
+    oversubscribes onto the efficiency cores and gets slower again."""
+    env = os.environ.get("KOKORO_THREADS")
+    if env and env.isdigit():
+        return int(env)
+    try:
+        import subprocess
+        out = subprocess.run(["sysctl", "-n", "hw.perflevel0.logicalcpu"],
+                             capture_output=True, text=True).stdout.strip()
+        cores = int(out)
+    except (OSError, ValueError):
+        cores = 8
+    return max(4, min(8, cores))
+
 SR = 24000
-START_BUFFER = SR * 2       # buffer 2s of audio before playback begins
-RESUME_BUFFER = SR * 3 // 2 # after running dry, rebuild 1.5s before resuming
+START_BUFFER = SR * 7 // 2  # bank 3.5s of audio before playback begins
+RESUME_BUFFER = SR * 2      # after running dry, rebuild 2s before resuming
+MIN_START = SR * 5 // 2     # ...but a finished chunk holding 2.5s is enough
 
 ESPEAK_LIB, ESPEAK_DATA = find_espeak()
-kokoro = Kokoro(
-    os.path.join(HERE, "kokoro-v1.0.onnx"),
+_opts = ort.SessionOptions()
+_opts.intra_op_num_threads = synth_threads()
+_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+_session = ort.InferenceSession(
+    os.path.join(HERE, "kokoro-v1.0.onnx"), _opts,
+    providers=["CPUExecutionProvider"],
+)
+kokoro = Kokoro.from_session(
+    _session,
     os.path.join(HERE, "voices-v1.0.bin"),
     espeak_config=EspeakConfig(lib_path=ESPEAK_LIB, data_path=ESPEAK_DATA),
 )
@@ -97,11 +123,16 @@ buffer = np.zeros(SR * 600, dtype=np.float32)
 buf_len = 0                             # samples written so far
 cursor = 0                              # next sample to play
 synth_done = True
+chunks_done = 0                         # completed chunks this utterance
 paused = False
 say_active = False
 playing_started = False
 stream = None
-timeline = []                           # [(sample_start, word)] for RSVP
+# RSVP word timeline lives under its OWN lock: the audio callback must
+# never wait on read-along bookkeeping.
+tl_lock = threading.Lock()
+timeline = []                           # [(sample_start, word)]
+timeline_starts = []                    # sample_start only, for bisect
 
 
 def split_chunks(text, max_len=300, first_max_len=100):
@@ -174,7 +205,7 @@ def build_timeline(chunk_text, start_sample, n_samples, lead_gap):
 
 
 def synth_worker(gen, text, voice, speed, lang):
-    global buffer, buf_len, synth_done, timeline
+    global buffer, buf_len, synth_done, chunks_done
     first = True
     for chunk in split_chunks(text):
         with lock:
@@ -200,12 +231,19 @@ def synth_worker(gen, text, voice, speed, lang):
                     return
                 new[:buf_len] = buffer[:buf_len]
                 buffer = new
+        # Built before taking the audio lock — this thread is the only
+        # writer of buf_len, so reading it here is safe, and the regex
+        # work must not happen while the audio callback may be waiting.
+        entries = build_timeline(chunk, buf_len, n, lead_gap)
         with lock:
             if generation != gen:
                 return
             buffer[buf_len:buf_len + n] = samples
-            timeline.extend(build_timeline(chunk, buf_len, n, lead_gap))
             buf_len += n
+        with tl_lock:
+            timeline.extend(entries)
+            timeline_starts.extend(e[0] for e in entries)
+        chunks_done += 1
     with lock:
         if generation == gen:
             synth_done = True
@@ -272,11 +310,13 @@ def word_publisher(gen):
         with lock:
             if generation != gen or not say_active:
                 break
-            starts = [t[0] for t in timeline]
             pos = cursor
-            entries = timeline
-            idx = bisect.bisect_right(starts, pos) - 1
-            word = entries[idx][1] if idx >= 0 else None
+        with tl_lock:
+            starts, entries = timeline_starts, timeline
+        # bisect outside both locks: lists are append-only within a
+        # generation, so a concurrent append can only add later words
+        idx = bisect.bisect_right(starts, pos) - 1
+        word = entries[idx][1] if 0 <= idx < len(entries) else None
         if word != last:
             last = word
             set_word(word or "")
@@ -291,9 +331,12 @@ def player_worker(gen):
         with lock:
             if generation != gen:
                 return
-            # start once a comfortable buffer exists (or the text is fully
-            # synthesized, whichever comes first)
-            if buf_len >= START_BUFFER or (synth_done and buf_len > 0):
+            # start on a full cushion, or on a completed chunk that already
+            # holds a decent floor — waiting for the next chunk just to top
+            # up a nearly-full buffer doubles latency for nothing
+            if (buf_len >= START_BUFFER
+                    or (chunks_done >= 1 and buf_len >= MIN_START)
+                    or (synth_done and buf_len > 0)):
                 break
             if synth_done and buf_len == 0:  # synthesis produced nothing
                 return
@@ -310,19 +353,23 @@ def player_worker(gen):
         stream = s
         playing_started = True
     s.start()
+    print(f"playback started with {buf_len / SR:.1f}s buffered", flush=True)
     set_state("playing")
 
 
 def stop_playback():
     global generation, buf_len, cursor, synth_done, paused, say_active
-    global playing_started, stream, timeline
+    global playing_started, stream, timeline, timeline_starts, chunks_done
+    with tl_lock:
+        timeline = []
+        timeline_starts = []
     with lock:
         generation += 1
         old_stream = stream
         stream = None
         buf_len = 0
         cursor = 0
-        timeline = []
+        chunks_done = 0
         synth_done = True
         paused = False
         say_active = False

@@ -99,8 +99,12 @@ ktts (CLI / hotkeys) ───┤  unix socket
 ```
 
 The daemon keeps the model warm (dispatch is ~40 ms; speech starts in
-~1–1.5 s). Playback is a single in-memory sample buffer with a cursor, so
-pause is instant and rollback is seeking — no re-synthesis.
+~1.7–2 s with ~3.4 s of audio already banked). Playback is a single
+in-memory sample buffer with a cursor, so pause is instant and rollback is
+seeking — no re-synthesis. Synthesis runs on the performance cores (capped
+at 8 threads, override with `KOKORO_THREADS`) at roughly 3× realtime, and
+the read-along word timeline is kept on a separate lock so it can never
+delay the audio callback.
 
 ## Uninstall
 
