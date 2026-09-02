@@ -99,12 +99,25 @@ ktts (CLI / hotkeys) ───┤  unix socket
 ```
 
 The daemon keeps the model warm (dispatch is ~40 ms; speech starts in
-~1.7–2 s with ~3.4 s of audio already banked). Playback is a single
-in-memory sample buffer with a cursor, so pause is instant and rollback is
-seeking — no re-synthesis. Synthesis runs on the performance cores (capped
-at 8 threads, override with `KOKORO_THREADS`) at roughly 3× realtime, and
-the read-along word timeline is kept on a separate lock so it can never
-delay the audio callback.
+~2–2.5 s with several seconds of audio already banked). Playback is a
+single in-memory sample buffer with a cursor, so pause is instant and
+rollback is seeking — no re-synthesis.
+
+Audio is written to PortAudio with **blocking writes from an ordinary
+thread, deliberately not a PortAudio callback**. A Python callback has to
+take the GIL on the audio clock's schedule, and the onnxruntime synthesis
+threads starve it — measured as 200 ms gaps on an 85 ms deadline, occurring
+only while synthesis was still running, which is exactly when the audio
+sounded rough. `write()` blocks in C with the GIL released instead, so
+PortAudio's own buffer covers any stall on the Python side.
+
+Chunks are also capped small enough (~140 chars) that rendering the next
+one always finishes before the cushion in hand runs out; a larger cap meant
+one big chunk took longer to synthesize than the audio already buffered,
+which starved playback a few seconds in and then never again — the classic
+"rough at the start, then it settles" complaint. Synthesis runs on the
+performance cores (capped at 8 threads, override with `KOKORO_THREADS`) at
+roughly 3× realtime.
 
 ## Uninstall
 

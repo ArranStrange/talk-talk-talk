@@ -55,10 +55,10 @@ def find_espeak():
 
 
 def set_state(state):
-    """Publish daemon state for UI watchers (the Hammerspoon pill).
+    """Publish daemon state for UI watchers (Hammerspoon pill).
 
-    Always writes (no dedupe): the editor hooks and the pill also write
-    this file, so the daemon's idea of the last state can go stale.
+    Always writes (no dedupe): the Stop-hook and the pill also write this
+    file, so the daemon's idea of the last state can go stale.
     """
     try:
         with open(STATE_PATH + ".tmp", "w") as f:
@@ -116,9 +116,9 @@ set_state("idle")
 
 lock = threading.Lock()
 generation = 0
-# Preallocated audio buffer (10 min; grows if ever needed). Writes are
-# in-place slice copies so the lock is only held briefly — concatenating
-# under the lock caused audio-callback underruns.
+# Preallocated ring-free audio buffer (10 min; grows if ever needed).
+# Writes are in-place slice copies so the lock is only held briefly —
+# np.concatenate under the lock caused audio-callback underruns.
 buffer = np.zeros(SR * 600, dtype=np.float32)
 buf_len = 0                             # samples written so far
 cursor = 0                              # next sample to play
@@ -131,11 +131,18 @@ stream = None
 # RSVP word timeline lives under its OWN lock: the audio callback must
 # never wait on read-along bookkeeping.
 tl_lock = threading.Lock()
+synth_lock = threading.Lock()  # one model call at a time, see synth_worker
 timeline = []                           # [(sample_start, word)]
 timeline_starts = []                    # sample_start only, for bisect
 
 
-def split_chunks(text, max_len=300, first_max_len=100):
+# Chunks must be small enough that synthesizing the NEXT one takes less
+# time than playing the cushion we already hold. At ~3x realtime a 300ch
+# chunk is ~18s of audio needing ~6s to render — far longer than the ~3.5s
+# cushion, so playback reliably starved a few seconds in and then, once
+# that huge chunk landed, never starved again. That was the "rough at the
+# start, then it settles" symptom.
+def split_chunks(text, max_len=140, first_max_len=100):
     text = text.strip()
     # If the very first sentence is long, break it at a comma so playback
     # can start on the first clause instead of waiting for the whole sentence.
@@ -162,12 +169,19 @@ FADE = int(0.015 * SR)      # 15ms edge fade per chunk: kills boundary clicks
 CHUNK_GAP = int(0.12 * SR)  # short natural pause between joined chunks
 
 
+_FADE_RAMP = np.linspace(0.0, 1.0, FADE, dtype=np.float32)
+
+
 def smooth_edges(samples):
-    """Fade a chunk's head and tail so joins are click-free."""
+    """Fade a chunk's head and tail so joins are click-free.
+
+    The ramp is precomputed: allocating one per chunk was a needless
+    GIL-holding allocation on the synthesis thread.
+    """
     n = len(samples)
     f = min(FADE, n // 4)
-    if f > 0:
-        ramp = np.linspace(0.0, 1.0, f, dtype=np.float32)
+    if f > 8:  # a tiny chunk would be all ramp and no speech
+        ramp = _FADE_RAMP[:f]
         samples[:f] *= ramp
         samples[-f:] *= ramp[::-1]
     return samples
@@ -212,17 +226,17 @@ def synth_worker(gen, text, voice, speed, lang):
             if generation != gen:
                 return
         try:
-            samples, _ = kokoro.create(chunk, voice=voice, speed=speed, lang=lang)
+            with synth_lock:
+                if generation != gen:
+                    return
+                samples, _ = kokoro.create(
+                    chunk, voice=voice, speed=speed, lang=lang)
         except Exception:
             continue
         samples = smooth_edges(np.asarray(samples, dtype=np.float32))
-        lead_gap = 0
-        if not first:
-            lead_gap = CHUNK_GAP
-            samples = np.concatenate(
-                [np.zeros(CHUNK_GAP, dtype=np.float32), samples])
+        lead_gap = 0 if first else CHUNK_GAP
         first = False
-        n = len(samples)
+        n = len(samples) + lead_gap
         # grow (rare): build the bigger array outside the lock
         if buf_len + n > len(buffer):
             new = np.zeros(max(len(buffer) * 2, buf_len + n), dtype=np.float32)
@@ -238,7 +252,9 @@ def synth_worker(gen, text, voice, speed, lang):
         with lock:
             if generation != gen:
                 return
-            buffer[buf_len:buf_len + n] = samples
+            if lead_gap:
+                buffer[buf_len:buf_len + lead_gap] = 0
+            buffer[buf_len + lead_gap:buf_len + n] = samples
             buf_len += n
         with tl_lock:
             timeline.extend(entries)
@@ -247,55 +263,6 @@ def synth_worker(gen, text, voice, speed, lang):
     with lock:
         if generation == gen:
             synth_done = True
-
-
-def make_callback(gen):
-    starved = [False]  # once dry, wait for RESUME_BUFFER before resuming
-
-    def callback(outdata, frames, time_info, status):
-        global cursor
-        if status:
-            print(f"audio status: {status}", flush=True)
-        with lock:
-            if generation != gen or paused:
-                outdata.fill(0)
-                return
-            avail = buf_len - cursor
-            if not synth_done:
-                if starved[0]:
-                    if avail >= RESUME_BUFFER:
-                        starved[0] = False
-                    else:
-                        outdata.fill(0)
-                        return
-                elif avail < frames:
-                    starved[0] = True
-                    print("buffer dry: waiting for synthesis", flush=True)
-                    outdata.fill(0)
-                    return
-            n = min(frames, max(avail, 0))
-            if n > 0:
-                outdata[:n, 0] = buffer[cursor:cursor + n]
-                cursor += n
-            if n < frames:
-                outdata[n:, 0] = 0
-            if synth_done and cursor >= buf_len:
-                raise sd.CallbackStop
-    return callback
-
-
-def make_finished(gen):
-    def finished():
-        global say_active, playing_started
-        done = False
-        with lock:
-            if generation == gen:
-                say_active = False
-                playing_started = False
-                done = True
-        if done:
-            set_state("idle")
-    return finished
 
 
 def word_publisher(gen):
@@ -324,37 +291,92 @@ def word_publisher(gen):
     set_word("")
 
 
+BLOCK = 2048  # samples per write (~85ms): pause/rollback granularity
+
+
 def player_worker(gen):
-    """Wait for the first synthesized samples, then start the stream."""
-    global stream, playing_started
-    while True:
+    """Feed the output stream with blocking writes from a normal thread.
+
+    Deliberately NOT a PortAudio callback. A Python callback has to take
+    the GIL to the beat of the audio clock, and the onnxruntime synthesis
+    threads starve it — measured as 200ms gaps on an 85ms deadline, only
+    ever while synthesis was still running, which is exactly when the
+    audio sounded rough. sd.write() instead blocks in C with the GIL
+    released, and PortAudio's own buffer covers any stall on this side.
+    """
+    global stream, playing_started, say_active, cursor
+
+    while True:  # wait for enough audio to start on
         with lock:
             if generation != gen:
                 return
-            # start on a full cushion, or on a completed chunk that already
-            # holds a decent floor — waiting for the next chunk just to top
-            # up a nearly-full buffer doubles latency for nothing
             if (buf_len >= START_BUFFER
                     or (chunks_done >= 1 and buf_len >= MIN_START)
                     or (synth_done and buf_len > 0)):
                 break
             if synth_done and buf_len == 0:  # synthesis produced nothing
+                say_active = False
+                playing_started = False
+                set_state("idle")
                 return
         time.sleep(0.03)
-    s = sd.OutputStream(
-        samplerate=SR, channels=1, dtype="float32",
-        blocksize=2048, latency="high",
-        callback=make_callback(gen), finished_callback=make_finished(gen),
-    )
+
+    s = sd.OutputStream(samplerate=SR, channels=1, dtype="float32",
+                        blocksize=0, latency="high")
+    s.start()
     with lock:
         if generation != gen:
             s.close()
             return
         stream = s
         playing_started = True
-    s.start()
-    print(f"playback started with {buf_len / SR:.1f}s buffered", flush=True)
+        buffered = buf_len / SR
+    print(f"playback started with {buffered:.1f}s buffered", flush=True)
     set_state("playing")
+
+    silence = np.zeros(BLOCK, dtype=np.float32)
+    starved = False
+    _t0 = time.time()
+    try:
+        while True:
+            out = None
+            with lock:
+                if generation != gen:
+                    return
+                if not paused:
+                    avail = buf_len - cursor
+                    if synth_done and avail <= 0:
+                        break                       # spoken to the end
+                    if not synth_done and starved and avail < RESUME_BUFFER:
+                        pass                        # rebuilding the cushion
+                    elif not synth_done and avail < BLOCK:
+                        if not starved:
+                            starved = True
+                            print(f"buffer dry at t+{time.time()-_t0:.1f}s "
+                                  f"(played {cursor/SR:.1f}s, have {buf_len/SR:.1f}s, "
+                                  f"synth_done={synth_done})", flush=True)
+                    else:
+                        starved = False
+                        n = min(BLOCK, avail)
+                        if n > 0:
+                            out = buffer[cursor:cursor + n].copy()
+                            cursor += n
+            s.write(silence if out is None else out)
+    finally:
+        done = False
+        with lock:
+            if generation == gen:
+                stream = None
+                say_active = False
+                playing_started = False
+                done = True
+        try:
+            s.stop()
+            s.close()
+        except Exception:
+            pass
+        if done:
+            set_state("idle")
 
 
 def stop_playback():
@@ -377,7 +399,6 @@ def stop_playback():
     if old_stream is not None:
         try:
             old_stream.abort()
-            old_stream.close()
         except Exception:
             pass
     set_state("idle")
