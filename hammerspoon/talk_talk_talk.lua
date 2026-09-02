@@ -78,6 +78,23 @@ local RSVP_SIZE = 26
 local ORP_COLOR = { red = 1, green = 0.36, blue = 0.30, alpha = 1 }
 local drawerLeft, drawerRight, drawerY = 14, 262, 46
 
+local TLDR_SCRIPT = KOKORO_DIR .. "/tldr.py"
+local CONFIG_FILE_EARLY = KOKORO_DIR .. "/config.json"
+
+local function readCfg()
+  local f = io.open(CONFIG_FILE_EARLY, "r")
+  if not f then return {} end
+  local raw = f:read("*a") or ""
+  f:close()
+  local ok, cfg = pcall(hs.json.decode, raw)
+  return (ok and type(cfg) == "table") and cfg or {}
+end
+
+local function writeCfg(cfg)
+  local f = io.open(CONFIG_FILE_EARLY, "w")
+  if f then f:write(hs.json.encode(cfg)) f:close() end
+end
+
 local function playPending()
   hs.task.new("/bin/sh", nil,
     { "-c", "exec '" .. KTTS .. "' say - < '" .. PENDING_FILE .. "'" }):start()
@@ -87,6 +104,27 @@ local function dismissReady()
   local f = io.open(STATE_FILE, "w")
   if f then f:write("idle") f:close() end
 end
+
+local tldrRunning = false
+
+-- Summarise the staged reply, then hand it to the full-screen reader.
+local function tldrPendingToReader()
+  if tldrRunning then return end
+  tldrRunning = true
+  hs.alert.show("Summarising…", 1.2)
+  hs.task.new("/bin/sh", function(code, stdout, stderr)
+    tldrRunning = false
+    local summary = (stdout or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if code == 0 and #summary > 0 then
+      if tttReadText then tttReadText(summary) end
+    else
+      hs.alert.show("TLDR failed: " .. ((stderr or ""):gsub("%s+$", "")), 4)
+    end
+  end, { "-c", "'" .. TLDR_SCRIPT .. "' < '" .. PENDING_FILE .. "'" }):start()
+end
+
+-- Exposed so a script, another hotkey, or a test can trigger it directly.
+tttTldrToReader = tldrPendingToReader
 
 local AUTO_ON  = { red = 0.25, green = 0.80, blue = 0.35, alpha = 0.95 }
 local AUTO_OFF = { red = 1, green = 1, blue = 1, alpha = 0.30 }
@@ -184,6 +222,10 @@ local function buildPill()
                 frame = { x = 0, y = 0, w = 1.5, h = 6 },
                 fillColor = { red = 1, green = 1, blue = 1, alpha = 0.25 } }
   end
+  pill[18] = { type = "text", frame = { x = 0, y = 11, w = 44, h = 16 },
+               text = "TL;DR", textSize = 10, textAlignment = "center",
+               textColor = { white = 1, alpha = 0.45 },
+               trackMouseDown = true, id = "tldr" }
   pill:mouseCallback(function(_, event, id)
     if event ~= "mouseDown" then return end
     if id == "auto" then
@@ -193,6 +235,8 @@ local function buildPill()
     elseif id == "close" then
       pillHidden = true
       pill:hide(0.15)
+    elseif id == "tldr" then
+      tldrPendingToReader()
     elseif id == "back" then
       ktts("back")
     elseif id == "toggle" then
@@ -235,8 +279,9 @@ local function layoutPill(st)
   else
     cw = math.floor(#(LABELS[st] or st) * 7.2) + 8
   end
-  local autoX = 36 + cw + 4
-  local backX  = autoX + 46
+  local autoX  = 36 + cw + 4
+  local tldrX  = autoX + 46
+  local backX  = tldrX + 48
   local togX   = backX + 30
   local stopX  = togX + 32
   local rsvpX  = stopX + 30
@@ -244,6 +289,7 @@ local function layoutPill(st)
   local w      = closeX + 22 + 8
   pill[3].frame  = { x = 36, y = 8, w = cw, h = 20 }
   pill[6].frame  = { x = autoX, y = 11, w = 42, h = 16 }
+  pill[18].frame = { x = tldrX, y = 11, w = 44, h = 16 }
   pill[12].frame = { x = backX, y = 6, w = 30, h = 26 }
   pill[4].frame  = { x = togX, y = 5, w = 32, h = 26 }
   pill[5].frame  = { x = stopX, y = 5, w = 32, h = 26 }
@@ -401,6 +447,7 @@ local function updatePill()
   pill[5].textColor.alpha = (st ~= "loading") and 0.95 or 0.25
   pill[6].textColor = autoRead and AUTO_ON or AUTO_OFF
   pill[12].textColor.alpha = (st == "playing" or st == "paused") and 0.95 or 0.25
+  pill[18].textColor = { white = 1, alpha = (st == "ready") and 0.9 or 0.4 }
   pill[14].textColor = rsvpOn and AUTO_ON or AUTO_OFF
   updateWord()
   pill:show(0.2)
@@ -826,8 +873,107 @@ local function buildMenu()
     })
   end
   table.insert(items, { title = "-" })
+  local cfg2 = readCfg()
   table.insert(items, { title = "Auto-read replies", checked = autoRead,
                         fn = toggleAutoRead })
+  table.insert(items, {
+    title = "TLDR mode (summarise replies)",
+    checked = cfg2.tldr_replies == true,
+    fn = function()
+      local c = readCfg()
+      c.tldr_replies = not (c.tldr_replies == true)
+      writeCfg(c)
+      hs.alert.show(c.tldr_replies and "TLDR mode: ON" or "TLDR mode: OFF")
+    end,
+  })
+  table.insert(items, {
+    title = "TLDR the last reply → reader",
+    disabled = tldrRunning,
+    fn = tldrPendingToReader,
+  })
+
+  local PROVIDERS = {
+    { "claude-cli", "Claude Code CLI (no key, uses your plan)" },
+    { "anthropic",  "Claude API (needs key)" },
+    { "openai",     "ChatGPT API (needs key)" },
+    { "extractive", "Local, no AI (free, instant)" },
+  }
+  local MODELS = {
+    ["claude-cli"] = { "haiku", "sonnet", "opus" },
+    ["anthropic"]  = { "claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-opus-5" },
+    ["openai"]     = { "gpt-4o-mini", "gpt-4o" },
+    ["extractive"] = {},
+  }
+  local current = cfg2.tldr_provider or "claude-cli"
+
+  local provMenu = {}
+  for _, pr in ipairs(PROVIDERS) do
+    table.insert(provMenu, {
+      title = pr[2],
+      checked = (current == pr[1]),
+      fn = function()
+        local c = readCfg()
+        c.tldr_provider = pr[1]
+        c.tldr_model = nil  -- fall back to that provider's default
+        writeCfg(c)
+        hs.alert.show("TLDR via " .. pr[2])
+      end,
+    })
+  end
+  table.insert(provMenu, { title = "-" })
+  table.insert(provMenu, { title = "Store Claude API key…", fn = function()
+    hs.pasteboard.setContents("ttt-set-key anthropic")
+    hs.alert.show("Command copied — paste it in Terminal.\nYour key is typed straight into the Keychain.", 5)
+  end })
+  table.insert(provMenu, { title = "Store ChatGPT API key…", fn = function()
+    hs.pasteboard.setContents("ttt-set-key openai")
+    hs.alert.show("Command copied — paste it in Terminal.\nYour key is typed straight into the Keychain.", 5)
+  end })
+  table.insert(items, { title = "TLDR provider", menu = provMenu })
+
+  local mdl = MODELS[current] or {}
+  if #mdl > 0 then
+    local modelMenu = {}
+    local chosen = cfg2.tldr_model or mdl[1]
+    for _, m in ipairs(mdl) do
+      table.insert(modelMenu, {
+        title = m,
+        checked = (chosen == m),
+        fn = function()
+          local c = readCfg()
+          c.tldr_model = m
+          writeCfg(c)
+        end,
+      })
+    end
+    table.insert(modelMenu, { title = "-" })
+    table.insert(modelMenu, { title = "Custom model…", fn = function()
+      local ok, val = hs.dialog.textPrompt("TLDR model",
+        "Model identifier to send to the " .. current .. " API:",
+        cfg2.tldr_model or "", "Use", "Cancel")
+      if ok == "Use" and val and #val > 0 then
+        local c = readCfg()
+        c.tldr_model = val
+        writeCfg(c)
+      end
+    end })
+    table.insert(items, { title = "TLDR model", menu = modelMenu })
+  end
+
+  local lenMenu = {}
+  for _, n in ipairs({ 1, 2, 3, 5 }) do
+    table.insert(lenMenu, {
+      title = n .. (n == 1 and " sentence" or " sentences"),
+      checked = ((cfg2.tldr_sentences or 3) == n),
+      fn = function()
+        local c = readCfg()
+        c.tldr_sentences = n
+        writeCfg(c)
+      end,
+    })
+  end
+  table.insert(items, { title = "TLDR length", menu = lenMenu })
+
   table.insert(items, { title = "Read-along words", checked = rsvpOn,
                         fn = toggleRsvp })
 

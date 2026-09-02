@@ -1,0 +1,18 @@
+#!/bin/bash
+# Store an API key for Talk Talk Talk in the macOS Keychain.
+#
+# The key is typed straight into `security`, which prompts for it without
+# echoing and without it ever appearing in a command line, a shell history,
+# a config file or a log.
+set -euo pipefail
+
+case "${1:-}" in
+  anthropic) svc=ttt-anthropic; label="Anthropic (Claude)" ;;
+  openai)    svc=ttt-openai;    label="OpenAI (ChatGPT)" ;;
+  *) echo "usage: ttt-set-key anthropic|openai"; exit 1 ;;
+esac
+
+echo "Storing an API key for $label."
+echo "Paste it at the prompt below — it will not be shown as you type."
+security add-generic-password -U -a talk-talk-talk -s "$svc" -w
+echo "Saved to your Keychain. Talk Talk Talk will read it from there."

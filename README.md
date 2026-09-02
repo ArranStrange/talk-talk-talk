@@ -24,6 +24,11 @@ account, no network calls after install.
   word as it is spoken, RSVP style with the ORP anchor letter highlighted
   and pinned so your eye never travels; see
   [docs/RSVP-SPEC.md](docs/RSVP-SPEC.md)
+- **TLDR mode** — toggle it on and agent replies are summarised before they
+  are read, via the Claude CLI (no key needed), the Claude or ChatGPT API
+  (your key, kept in the Keychain), or a local no-AI extractive summariser.
+  There is also a TL;DR button on the pill that summarises the last reply
+  straight into the reader.
 - **Silent RSVP reader** (`⌃⌥R`) — select text and read it word-by-word with
   no audio at all. Dims the whole screen down to a single centred word with
   its anchor letter pinned; hold `R` to advance, release to hold. Speed and
@@ -89,6 +94,20 @@ Voice IDs are prefixed by accent/gender: `af_`/`am_` American,
 Japanese, and Mandarin sets — `af_heart` (default), `af_bella`, `bf_emma`,
 and `bm_george` are good starting points. See the
 [Kokoro voices list](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md).
+
+## TLDR providers
+
+| Provider | Cost | Speed | Setup |
+|---|---|---|---|
+| `claude-cli` (default) | none, draws on your Claude plan allowance | ~11–20 s | none |
+| `anthropic` | ~$0.004 per 2,000 words on Haiku | ~2 s | `ttt-set-key anthropic` |
+| `openai` | comparable, model-dependent | ~2 s | `ttt-set-key openai` |
+| `extractive` | free, offline | instant | none |
+
+`ttt-set-key` types your key straight into `security`, which prompts for it
+without echoing, so the key never appears in a command line, shell history,
+config file or log. It is read back from the Keychain at call time, and
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` work as a fallback.
 
 ## How it works
 

@@ -59,10 +59,13 @@ for f in kokoro-v1.0.onnx voices-v1.0.bin; do
 done
 
 # --- 5. ktts on PATH ------------------------------------------------------------
-chmod +x "$KOKORO/ktts" "$KOKORO/daemon.py" "$KOKORO/speak_response.py" "$KOKORO/codex_notify.py"
+chmod +x "$KOKORO/ktts" "$KOKORO/daemon.py" "$KOKORO/speak_response.py" \
+         "$KOKORO/codex_notify.py" "$KOKORO/cursor_notify.py" \
+         "$KOKORO/tldr.py" "$KOKORO/ttt-set-key"
 BIN="$(brew --prefix)/bin"
 say "Linking $BIN/ktts"
 ln -sf "$KOKORO/ktts" "$BIN/ktts"
+ln -sf "$KOKORO/ttt-set-key" "$BIN/ttt-set-key"
 
 # --- 6. Hammerspoon module -------------------------------------------------------
 say "Installing Hammerspoon module"

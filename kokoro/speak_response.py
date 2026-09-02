@@ -18,6 +18,7 @@ Uses only the standard library.
 import json
 import os
 import re
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
@@ -61,6 +62,34 @@ def clean_for_speech(text):
     return text
 
 
+def maybe_summarise(text):
+    """TLDR mode: replace the reply with a summary before staging it.
+
+    Off unless "tldr_replies" is set in config.json (the menu bar writes it).
+    Runs here rather than in the UI because the hook is already async, so a
+    slow provider delays only the spoken summary, never the agent.
+    """
+    try:
+        with open(os.path.join(HERE, "config.json")) as f:
+            cfg = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return text
+    if not cfg.get("tldr_replies"):
+        return text
+    if len(text.split()) < 40:
+        return text  # not worth summarising
+    try:
+        out = subprocess.run(
+            [os.path.join(HERE, "tldr.py")],
+            input=text, capture_output=True, text=True, timeout=180)
+        summary = out.stdout.strip()
+        if out.returncode == 0 and summary:
+            return summary
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return text  # any failure falls back to reading the full reply
+
+
 def stage(text):
     """Write cleaned text to pending.txt and flag state=ready for the pill.
 
@@ -68,6 +97,7 @@ def stage(text):
     streams, so a long reply costs nothing but time. Set KOKORO_MAX to a
     character count to cap it.
     """
+    text = maybe_summarise(text)
     max_chars = int(os.environ.get("KOKORO_MAX", "0"))
     if max_chars and len(text) > max_chars:
         text = text[:max_chars].rsplit(" ", 1)[0] + " ... response truncated."
