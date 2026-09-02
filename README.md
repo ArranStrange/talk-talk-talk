@@ -28,8 +28,9 @@ account, no network calls after install.
   are read, via the Claude CLI (no key needed), the Claude or ChatGPT API
   (your key, kept in the Keychain), or a local no-AI extractive summariser.
   It is a switch (`⌃⌥T`, or the pill's TL;DR button), not a separate command:
-  turn it on and everything you read gets summarised first, whether you send
-  it to speech or to the reader.
+  turn it on and longer text gets summarised first, whether you send it to
+  speech or to the reader. Anything under ~70 words (a short paragraph) is
+  read as-is — no call, no wait — and that threshold is settable in the menu.
 - **Silent reader** (`⌃⌥R`) — sends the selection to a full-screen reader
   instead of speaking it, dimming the whole screen down to a single
   centred word with its anchor letter pinned. Hold `R` to advance, release to

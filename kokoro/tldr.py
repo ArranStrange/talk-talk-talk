@@ -8,6 +8,9 @@ Providers, chosen by "tldr_provider" in config.json:
                allowance instead. The default, because it needs no setup.
   anthropic    the Anthropic API directly. Needs a key. Fast and cheap.
   openai       the OpenAI API. Needs a key.
+Text shorter than "tldr_min_words" (default 70) is returned unchanged, so
+a few sentences never cost a provider call.
+
   extractive   no model at all: scores sentences by word frequency and
                returns the best few. Free, instant, offline, and it selects
                existing sentences rather than writing new prose.
@@ -32,6 +35,7 @@ CONFIG_PATH = os.path.join(HERE, "config.json")
 KEYCHAIN_ACCOUNT = "talk-talk-talk"
 KEYCHAIN_SERVICE = {"anthropic": "ttt-anthropic", "openai": "ttt-openai"}
 ENV_VAR = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+DEFAULT_MIN_WORDS = 70  # roughly a short paragraph; below this, don't bother
 DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5-20251001",
     "openai": "gpt-4o-mini",
@@ -196,8 +200,11 @@ def main():
     text = sys.stdin.read().strip()
     if not text:
         sys.exit("nothing to summarise")
-    if len(text.split()) < 25:
-        print(text)  # already short enough to be its own summary
+    # Short text is its own summary: below the threshold, return it
+    # untouched rather than spending a call to compress a paragraph.
+    min_words = int(cfg.get("tldr_min_words") or DEFAULT_MIN_WORDS)
+    if len(text.split()) < min_words:
+        print(text)
         return
 
     try:

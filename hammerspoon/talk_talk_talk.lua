@@ -3,8 +3,8 @@
 -- then loaded from ~/.hammerspoon/init.lua via: require("talk_talk_talk")
 --
 -- TLDR is a switch (⌃⌥T, or the pill's TL;DR button): when it is on, text
--- is summarised before being read. Where the text lands is chosen by the
--- shortcut, not by a mode.
+-- over tldr_min_words is summarised before being read. Where the text lands
+-- is chosen by the shortcut, not by a mode.
 --
 -- Hotkeys:
 --   ⌃⌥S  speak the selection       ⌃⌥R  selection in the reader
@@ -147,8 +147,21 @@ local function cancelSummarise()
   writeState("idle")
 end
 
+-- Same threshold tldr.py applies, checked before the pill claims to be
+-- summarising: a short paragraph should not flash a loading state or
+-- spawn a process just to be handed straight back.
+local function tooShortToSummarise(path)
+  local f = io.open(path, "r")
+  if not f then return false end
+  local text = f:read("*a") or ""
+  f:close()
+  local n = 0
+  for _ in text:gmatch("%S+") do n = n + 1 end
+  return n < (tonumber(readCfg().tldr_min_words) or 70)
+end
+
 local function deliverFile(path, destination)
-  if not tldrEnabled() then
+  if not tldrEnabled() or tooShortToSummarise(path) then
     hs.task.new("/bin/sh", function(code, stdout)
       deliver((stdout or ""):gsub("%s+$", ""), destination)
     end, { "-c", "cat '" .. path .. "'" }):start()
@@ -1046,6 +1059,19 @@ local function buildMenu()
       end })
   end
   table.insert(tldrMenu, { title = "Summary length", menu = lenMenu })
+
+  local minMenu = {}
+  local curMin = tonumber(tcfg.tldr_min_words) or 70
+  for _, n in ipairs({ 40, 70, 120, 200 }) do
+    table.insert(minMenu, { title = "over " .. n .. " words",
+      checked = (curMin == n),
+      fn = function()
+        local c = readCfg(); c.tldr_min_words = n; writeCfg(c)
+        hs.alert.show("Only summarising text over " .. n .. " words")
+      end })
+  end
+  table.insert(tldrMenu, {
+    title = "Only summarise (over " .. curMin .. " words)", menu = minMenu })
 
   table.insert(tldrMenu, { title = "-" })
   table.insert(tldrMenu, { title = "Store Claude API key…", fn = function()

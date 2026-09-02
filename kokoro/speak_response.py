@@ -76,8 +76,10 @@ def maybe_summarise(text):
         return text
     if not cfg.get("tldr_replies"):
         return text
-    if len(text.split()) < 40:
-        return text  # not worth summarising
+    # Same threshold tldr.py uses, checked here too so a short reply does
+    # not even spawn the process.
+    if len(text.split()) < int(cfg.get("tldr_min_words") or 70):
+        return text
     # Surface the wait: a provider can take tens of seconds, and without
     # this the pill stays blank and the delay looks like nothing happening.
     try:
