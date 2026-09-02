@@ -294,6 +294,46 @@ def word_publisher(gen):
 BLOCK = 2048  # samples per write (~85ms): pause/rollback granularity
 
 
+def resample(block, dst_rate):
+    """Linear resample a mono float32 block from SR to dst_rate."""
+    if dst_rate == SR:
+        return block
+    n = max(1, int(round(len(block) * dst_rate / SR)))
+    src_idx = np.linspace(0.0, len(block) - 1, n)
+    return np.interp(src_idx, np.arange(len(block)), block).astype(np.float32)
+
+
+def open_output_stream():
+    """Open the device, tolerating a machine whose audio just changed.
+
+    Joining a call, plugging in headphones or switching docks can make
+    CoreAudio reject a stream at our native 24 kHz (seen in the wild as
+    PortAudio -9986 / AUHAL -50). Fall back to whatever the current default
+    device actually wants and resample into it, rather than going silent.
+    """
+    attempts = [SR]
+    try:
+        default = float(sd.query_devices(kind="output")["default_samplerate"])
+        if int(default) != SR:
+            attempts.append(int(default))
+    except Exception:
+        pass
+    for rate in attempts + [48000, 44100]:
+        if rate != attempts[0] and rate in attempts[:-1]:
+            continue
+        try:
+            s = sd.OutputStream(samplerate=rate, channels=1, dtype="float32",
+                                blocksize=0, latency="high")
+            s.start()
+            if rate != SR:
+                print(f"audio device refused {SR} Hz; using {rate} Hz",
+                      flush=True)
+            return s, rate
+        except Exception as e:
+            print(f"audio open at {rate} Hz failed: {e}", flush=True)
+    return None, SR
+
+
 def player_worker(gen):
     """Feed the output stream with blocking writes from a normal thread.
 
@@ -321,9 +361,15 @@ def player_worker(gen):
                 return
         time.sleep(0.03)
 
-    s = sd.OutputStream(samplerate=SR, channels=1, dtype="float32",
-                        blocksize=0, latency="high")
-    s.start()
+    s, rate = open_output_stream()
+    if s is None:
+        with lock:
+            if generation == gen:
+                say_active = False
+                playing_started = False
+        set_state("idle")
+        print("playback aborted: no usable audio device", flush=True)
+        return
     with lock:
         if generation != gen:
             s.close()
@@ -361,7 +407,12 @@ def player_worker(gen):
                         if n > 0:
                             out = buffer[cursor:cursor + n].copy()
                             cursor += n
-            s.write(silence if out is None else out)
+            try:
+                s.write(resample(silence if out is None else out, rate))
+            except Exception as e:
+                # device pulled out from under us mid-sentence
+                print(f"audio write failed, stopping: {e}", flush=True)
+                break
     finally:
         done = False
         with lock:

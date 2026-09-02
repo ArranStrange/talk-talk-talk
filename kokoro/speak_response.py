@@ -103,6 +103,10 @@ def stage(text):
         text = text[:max_chars].rsplit(" ", 1)[0] + " ... response truncated."
     with open(os.path.join(HERE, "pending.txt"), "w") as f:
         f.write(text)
+    try:  # a stale word must not linger under a new reply
+        open(os.path.join(HERE, "word"), "w").close()
+    except OSError:
+        pass
     state_tmp = os.path.join(HERE, "state.tmp")
     with open(state_tmp, "w") as f:
         f.write("ready")
