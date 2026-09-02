@@ -109,6 +109,24 @@ Japanese, and Mandarin sets — `af_heart` (default), `af_bella`, `bf_emma`,
 and `bm_george` are good starting points. See the
 [Kokoro voices list](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md).
 
+## Reading structured text
+
+Markdown is converted for the ear rather than stripped:
+
+| Input | Read as |
+|---|---|
+| `## Heading` | its own sentence, followed by a longer pause |
+| Tables | one sentence per row — "Process: main server, Raises: 5" |
+| Short code (≤4 lines) | spoken, with identifiers made pronounceable |
+| Longer code | "Code block, 12 lines of python" |
+| `` `raiseThrottled()` `` | "raise Throttled" |
+| Bare URLs | "link to github.com" |
+| List items | a sentence each, so they do not blur together |
+
+Paragraph, heading, table and code boundaries get a 420 ms pause; sentences
+within a paragraph get 120 ms. That pacing is what makes a long document
+navigable by ear.
+
 ## TLDR providers
 
 | Provider | Cost | Speed | Setup |

@@ -142,7 +142,7 @@ timeline_starts = []                    # sample_start only, for bisect
 # cushion, so playback reliably starved a few seconds in and then, once
 # that huge chunk landed, never starved again. That was the "rough at the
 # start, then it settles" symptom.
-def split_chunks(text, max_len=140, first_max_len=100):
+def split_sentences(text, max_len, first_max_len):
     text = text.strip()
     # If the very first sentence is long, break it at a comma so playback
     # can start on the first clause instead of waiting for the whole sentence.
@@ -150,7 +150,7 @@ def split_chunks(text, max_len=140, first_max_len=100):
     if len(first_sentence) > first_max_len:
         m = re.match(r"(.{30,%d}?,)\s+" % first_max_len, text)
         if m:
-            return [m.group(1)] + split_chunks(text[m.end():], max_len, max_len)
+            return [m.group(1)] + split_sentences(text[m.end():], max_len, max_len)
     sentences = re.split(r"(?<=[.!?;:])\s+", text)
     chunks, cur = [], ""
     for s in sentences:
@@ -165,8 +165,32 @@ def split_chunks(text, max_len=140, first_max_len=100):
     return chunks
 
 
+def split_chunks(text, max_len=140, first_max_len=100):
+    """Return [(chunk, lead_gap_samples)].
+
+    Blank-line boundaries in the cleaned text mark headings, paragraphs and
+    code/table blocks. Those get a longer pause than a plain sentence break,
+    which is what makes a structured document navigable by ear.
+    """
+    out = []
+    paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+    first = True
+    for para in paragraphs:
+        for i, piece in enumerate(
+                split_sentences(para, max_len,
+                                first_max_len if first else max_len)):
+            if first:
+                gap = 0
+            else:
+                gap = PARA_GAP if i == 0 else CHUNK_GAP
+            out.append((piece, gap))
+            first = False
+    return out
+
+
 FADE = int(0.015 * SR)      # 15ms edge fade per chunk: kills boundary clicks
-CHUNK_GAP = int(0.12 * SR)  # short natural pause between joined chunks
+CHUNK_GAP = int(0.12 * SR)  # between sentences
+PARA_GAP = int(0.42 * SR)   # after a heading, paragraph or block
 
 
 _FADE_RAMP = np.linspace(0.0, 1.0, FADE, dtype=np.float32)
@@ -221,9 +245,10 @@ def build_timeline(chunk_text, start_sample, n_samples, lead_gap):
 def synth_worker(gen, text, voice, speed, lang):
     global buffer, buf_len, synth_done, chunks_done
     first = True
-    for chunk in split_chunks(text):
+    for chunk, gap in split_chunks(text):
         with lock:
             if generation != gen:
+                print(f"utterance replaced after {chunks_done} chunks", flush=True)
                 return
         try:
             with synth_lock:
@@ -231,10 +256,13 @@ def synth_worker(gen, text, voice, speed, lang):
                     return
                 samples, _ = kokoro.create(
                     chunk, voice=voice, speed=speed, lang=lang)
-        except Exception:
+        except Exception as e:
+            # never silent: a chunk that will not synthesize is the
+            # difference between a full reading and a truncated one
+            print(f"synth failed on {chunk[:60]!r}: {e}", flush=True)
             continue
         samples = smooth_edges(np.asarray(samples, dtype=np.float32))
-        lead_gap = 0 if first else CHUNK_GAP
+        lead_gap = gap
         first = False
         n = len(samples) + lead_gap
         # grow (rare): build the bigger array outside the lock

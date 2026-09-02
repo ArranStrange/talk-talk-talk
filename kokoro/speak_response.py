@@ -45,21 +45,105 @@ def last_assistant_text(transcript_path):
     return text
 
 
+CODE_MAX_LINES = 4      # short snippets get read; longer ones announced
+CODE_MAX_CHARS = 200
+TABLE_MAX_ROWS = 12     # beyond this a table is announced, not recited
+
+
+def speak_identifier(name):
+    """Make code identifiers pronounceable.
+
+    raiseThrottled() -> "raise Throttled"; MINIMUM_FREE -> "MINIMUM FREE".
+    Applied only inside code spans, so ordinary prose is untouched.
+    """
+    name = re.sub(r"[;,]\s*$", "", name.strip())
+    name = re.sub(r"\(\s*\)$", "", name)
+    name = name.replace("::", " ").replace("_", " ").replace("/", " slash ")
+    name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def render_code(match):
+    lang, body = (match.group(1) or "").strip(), match.group(2)
+    lines = [l for l in body.strip().splitlines() if l.strip()]
+    if not lines:
+        return " "
+    if len(lines) <= CODE_MAX_LINES and len(body) <= CODE_MAX_CHARS:
+        spoken = "; ".join(speak_identifier(l) for l in lines)
+        return f"\n\nCode. {spoken}.\n\n"
+    what = f"{len(lines)} lines of {lang}" if lang else f"{len(lines)} lines"
+    return f"\n\nCode block, {what}.\n\n"
+
+
+def render_table(block):
+    """Read a table as column-and-value pairs, one sentence per row."""
+    rows = [r.strip() for r in block.strip().splitlines() if r.strip()]
+    cells = []
+    for r in rows:
+        if re.fullmatch(r"\|?[\s:\-|]+\|?", r):
+            continue  # the |---|---| separator
+        cells.append([c.strip() for c in r.strip().strip("|").split("|")])
+    if not cells:
+        return " "
+    header, body = cells[0], cells[1:]
+    if not body:
+        return "\n\n" + ", ".join(c for c in header if c) + ".\n\n"
+    if len(body) > TABLE_MAX_ROWS:
+        return f"\n\nTable, {len(body)} rows, not read out.\n\n"
+    out = []
+    for row in body:
+        pairs = []
+        for i, val in enumerate(row):
+            if not val:
+                continue
+            name = header[i].strip() if i < len(header) else ""
+            pairs.append(f"{name}: {val}" if name else val)
+        if pairs:
+            out.append(", ".join(pairs) + ".")
+    return "\n\n" + " ".join(out) + "\n\n"
+
+
 def clean_for_speech(text):
-    # drop fenced code blocks entirely
-    text = re.sub(r"```.*?```", " (code omitted) ", text, flags=re.DOTALL)
-    # inline code: keep the content, drop backticks
-    text = re.sub(r"`([^`]*)`", r"\1", text)
-    # markdown links: keep the label
+    """Turn markdown into something worth listening to.
+
+    Structure is converted rather than deleted: headings and paragraphs end
+    as their own sentence so the daemon gives them a pause, table rows are
+    read as column-and-value pairs, and short code is spoken while long code
+    is announced by size.
+    """
+    # fenced code first, before any other rule can touch its contents
+    text = re.sub(r"```([^\n]*)\n(.*?)```", render_code, text, flags=re.DOTALL)
+    # contiguous runs of pipe-delimited lines are a table
+    text = re.sub(r"(?:^[ \t]*\|.*\|[ \t]*\n?)+",
+                  lambda m: render_table(m.group(0)), text, flags=re.MULTILINE)
+    # inline code: pronounceable, not literal
+    text = re.sub(r"`([^`\n]+)`", lambda m: speak_identifier(m.group(1)), text)
+    # links keep their label; bare URLs collapse to the site
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    # headers, bold, italics, list bullets, tables
-    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\*\*?|__?", "", text)
-    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^\s*\|.*\|\s*$", "", text, flags=re.MULTILINE)
-    # collapse whitespace
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    text = re.sub(r"https?://([^/\s]+)\S*", r"link to \1", text)
+    # headings become a sentence of their own, with a paragraph break after
+    text = re.sub(r"^[ \t]*#{1,6}[ \t]*(.+?)[ \t]*$",
+                  lambda m: "\n\n" + m.group(1).rstrip(" .:") + ".\n\n",
+                  text, flags=re.MULTILINE)
+    text = re.sub(r"\*\*?|__?", "", text)          # emphasis markers
+    text = re.sub(r"^[ \t]*>[ \t]?", "", text, flags=re.MULTILINE)  # quotes
+    text = re.sub(r"^[ \t]*[-*_]{3,}[ \t]*$", "", text, flags=re.MULTILINE)
+
+    # list items end as sentences, so each one earns its own pause
+    def list_item(m):
+        body = m.group(1).strip()
+        if body and body[-1] not in ".!?:;":
+            body += "."
+        return body
+    text = re.sub(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(.*)$", list_item,
+                  text, flags=re.MULTILINE)
+
+    # whitespace: keep paragraph breaks, flatten everything else
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
+    text = re.sub(r" +", " ", text)
+    return text.strip()
 
 
 def maybe_summarise(text):
