@@ -24,7 +24,17 @@ import time
 
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
 SOCK_PATH = os.path.join(HERE, "daemon.sock")
+CONFIG_PATH = os.path.join(HERE, "config.json")
 VENV_PYTHON = os.path.join(HERE, "venv", "bin", "python")
+
+
+def config():
+    """Persisted defaults (written by the menu bar); env vars win."""
+    try:
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def connect():
@@ -67,12 +77,15 @@ def send(req):
 
 
 def say(text):
+    cfg = config()
     send({
         "cmd": "say",
         "text": text,
-        "voice": os.environ.get("KOKORO_VOICE", "af_heart"),
-        "speed": float(os.environ.get("KOKORO_SPEED", "1.1")),
-        "lang": os.environ.get("KOKORO_LANG", "en-us"),
+        "voice": os.environ.get("KOKORO_VOICE") or cfg.get("voice", "af_heart"),
+        "speed": float(os.environ.get("KOKORO_SPEED")
+                       or cfg.get("speed", 1.1)),
+        "lang": os.environ.get("KOKORO_LANG")
+                or cfg.get("lang", "en-us"),
     })
 
 

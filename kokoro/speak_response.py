@@ -11,7 +11,7 @@ Add to ~/.claude/settings.json:
     "command": "<repo>/kokoro/speak_response.py", "async": true, "timeout": 30}]}]}}
 
 Config via environment (set in the hook definition if desired):
-  KOKORO_MAX   max characters staged (default 1500)
+  KOKORO_MAX   cap on characters staged (default 0 = read the whole reply)
 
 Uses only the standard library.
 """
@@ -62,9 +62,14 @@ def clean_for_speech(text):
 
 
 def stage(text):
-    """Write cleaned text to pending.txt and flag state=ready for the pill."""
-    max_chars = int(os.environ.get("KOKORO_MAX", "1500"))
-    if len(text) > max_chars:
+    """Write cleaned text to pending.txt and flag state=ready for the pill.
+
+    No length cap by default: the daemon synthesizes chunk by chunk and
+    streams, so a long reply costs nothing but time. Set KOKORO_MAX to a
+    character count to cap it.
+    """
+    max_chars = int(os.environ.get("KOKORO_MAX", "0"))
+    if max_chars and len(text) > max_chars:
         text = text[:max_chars].rsplit(" ", 1)[0] + " ... response truncated."
     with open(os.path.join(HERE, "pending.txt"), "w") as f:
         f.write(text)

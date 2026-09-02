@@ -100,6 +100,7 @@ local function toggleAutoRead()
 end
 
 local updatePillRef = nil  -- set once updatePill is defined below
+local updateMenubarRef = nil  -- set once the menu bar item exists below
 local updateWordRef = nil  -- set once updateWord is defined below
 local wordTimer = nil
 local lastWord = nil
@@ -355,6 +356,7 @@ local function updatePill()
   end
   lastSeenState = currentState
   if readyTimer then readyTimer:stop() readyTimer = nil end
+  if updateMenubarRef then updateMenubarRef() end
   if currentState == "idle" then
     pillHidden = false
     if waveTimer then waveTimer:stop() waveTimer = nil end
@@ -430,6 +432,162 @@ tttPathWatcher = hs.pathwatcher.new(KOKORO_DIR, function(files)
 end):start()
 
 updatePill()
+
+-- ---------------------------------------------------------------------------
+-- Menu bar item: always present next to the clock, so the controls and
+-- options are reachable whether or not anything is currently speaking.
+-- ---------------------------------------------------------------------------
+
+local CONFIG_FILE = KOKORO_DIR .. "/config.json"
+
+local VOICES = {
+  { "American female", { "af_heart", "af_bella", "af_nicole", "af_sarah",
+                         "af_sky", "af_nova", "af_alloy", "af_aoede",
+                         "af_jessica", "af_kore", "af_river" }, "en-us" },
+  { "American male",   { "am_michael", "am_adam", "am_puck", "am_echo",
+                         "am_eric", "am_fenrir", "am_liam", "am_onyx" }, "en-us" },
+  { "British female",  { "bf_emma", "bf_isabella", "bf_alice", "bf_lily" }, "en-gb" },
+  { "British male",    { "bm_george", "bm_fable", "bm_daniel", "bm_lewis" }, "en-gb" },
+}
+local SPEEDS = { 0.8, 0.9, 1.0, 1.1, 1.25, 1.5 }
+
+local function readConfig()
+  local f = io.open(CONFIG_FILE, "r")
+  if not f then return { voice = "af_heart", speed = 1.1, lang = "en-us" } end
+  local raw = f:read("*a") or ""
+  f:close()
+  local ok, cfg = pcall(hs.json.decode, raw)
+  if not ok or type(cfg) ~= "table" then
+    return { voice = "af_heart", speed = 1.1, lang = "en-us" }
+  end
+  cfg.voice = cfg.voice or "af_heart"
+  cfg.speed = cfg.speed or 1.1
+  cfg.lang = cfg.lang or "en-us"
+  return cfg
+end
+
+local function writeConfig(cfg)
+  local f = io.open(CONFIG_FILE, "w")
+  if f then f:write(hs.json.encode(cfg)) f:close() end
+end
+
+local menubar = nil
+
+local MENU_COLORS = {
+  idle         = { white = 0.55, alpha = 1 },
+  loading      = { red = 0.95, green = 0.60, blue = 0.10, alpha = 1 },
+  synthesizing = { red = 0.95, green = 0.60, blue = 0.10, alpha = 1 },
+  playing      = { red = 0.20, green = 0.72, blue = 0.32, alpha = 1 },
+  paused       = { red = 0.90, green = 0.75, blue = 0.10, alpha = 1 },
+  ready        = { red = 0.30, green = 0.50, blue = 0.95, alpha = 1 },
+}
+local MENU_GLYPH = {
+  idle = "◍", loading = "◐", synthesizing = "◐",
+  playing = "◉", paused = "◑", ready = "◈",
+}
+
+local function updateMenubar()
+  if not menubar then return end
+  local st = currentState
+  menubar:setTitle(hs.styledtext.new(MENU_GLYPH[st] or "◍", {
+    font = { name = "Helvetica", size = 14 },
+    color = MENU_COLORS[st] or MENU_COLORS.idle,
+  }))
+end
+
+local function buildMenu()
+  local cfg = readConfig()
+  local st = currentState
+  local speaking = (st == "playing" or st == "paused")
+  local items = {}
+
+  local statusText = ({ idle = "Idle", loading = "Loading model…",
+                        synthesizing = "Preparing…", playing = "Speaking",
+                        paused = "Paused", ready = "Reply ready" })[st] or st
+  table.insert(items, { title = statusText, disabled = true })
+  table.insert(items, { title = "-" })
+
+  if st == "ready" then
+    table.insert(items, { title = "Play reply", fn = playPending })
+    table.insert(items, { title = "Dismiss reply", fn = dismissReady })
+  else
+    table.insert(items, {
+      title = (st == "paused") and "Resume" or "Pause",
+      disabled = not speaking,
+      fn = function() ktts("toggle") end,
+    })
+    table.insert(items, { title = "Rewind 10s", disabled = not speaking,
+                          fn = function() ktts("back") end })
+    table.insert(items, { title = "Stop", disabled = not speaking,
+                          fn = function() ktts("stop") end })
+  end
+  table.insert(items, { title = "-" })
+  table.insert(items, { title = "Speak selection", fn = speakSelection })
+  table.insert(items, { title = "Speak clipboard", fn = function() ktts("clip") end })
+  table.insert(items, { title = "-" })
+  table.insert(items, { title = "Auto-read replies", checked = autoRead,
+                        fn = toggleAutoRead })
+  table.insert(items, { title = "Read-along words", checked = rsvpOn,
+                        fn = toggleRsvp })
+
+  local voiceMenu = {}
+  for _, group in ipairs(VOICES) do
+    local groupName, ids, lang = group[1], group[2], group[3]
+    local sub = {}
+    for _, id in ipairs(ids) do
+      local label = id:gsub("^%a+_", "")
+      table.insert(sub, {
+        title = label:sub(1, 1):upper() .. label:sub(2),
+        checked = (cfg.voice == id),
+        fn = function()
+          local c = readConfig()
+          c.voice, c.lang = id, lang
+          writeConfig(c)
+          hs.alert.show("Voice: " .. id)
+        end,
+      })
+    end
+    table.insert(voiceMenu, { title = groupName, menu = sub })
+  end
+  table.insert(items, { title = "Voice", menu = voiceMenu })
+
+  local speedMenu = {}
+  for _, sp in ipairs(SPEEDS) do
+    table.insert(speedMenu, {
+      title = string.format("%.2gx", sp),
+      checked = (math.abs((cfg.speed or 1.1) - sp) < 0.001),
+      fn = function()
+        local c = readConfig()
+        c.speed = sp
+        writeConfig(c)
+        hs.alert.show(string.format("Speed: %.2gx", sp))
+      end,
+    })
+  end
+  table.insert(items, { title = "Speed", menu = speedMenu })
+
+  table.insert(items, { title = "-" })
+  table.insert(items, { title = "Hotkeys…", fn = function()
+    hs.alert.show("⌃⌥S speak selection\n⌃⌥P play / pause\n"
+      .. "⌃⌥← rewind 10s\n⌃⌥X stop\n⌃⌥A auto-read", 4)
+  end })
+  table.insert(items, { title = "Reset pill position", fn = function()
+    hs.settings.clear("tttPillPos")
+    hs.alert.show("Pill returns to the top right")
+  end })
+  table.insert(items, { title = "Restart speech engine", fn = function()
+    ktts("quit")
+    hs.alert.show("Engine will reload on next use")
+  end })
+  return items
+end
+
+menubar = hs.menubar.new()
+if menubar then
+  menubar:setMenu(buildMenu)  -- rebuilt on every click, so it is never stale
+  updateMenubarRef = updateMenubar
+  updateMenubar()
+end
 
 -- Hotkeys (bound last so they can see the pill state helpers above)
 hs.hotkey.bind({ "ctrl", "alt" }, "s", speakSelection)

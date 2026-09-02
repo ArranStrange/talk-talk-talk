@@ -9,6 +9,9 @@ account, no network calls after install.
 ## What you get
 
 - **Speak anything, anywhere** — select text in any app and press `⌃⌥S`
+- **A menu bar item** next to the clock, always there: a status glyph that
+  changes colour with state, and a menu with the transport controls, voice
+  and speed pickers, and the auto-read / read-along toggles
 - **A floating pill** with live state (loading / preparing / speaking /
   paused / replied), an animated waveform while speaking, and clickable
   AUTO / rewind / pause / stop buttons. Drag it anywhere; it remembers.
@@ -23,7 +26,8 @@ account, no network calls after install.
   [docs/RSVP-SPEC.md](docs/RSVP-SPEC.md)
 - **Dictation-aware** — hold-Fn dictation tools (e.g. Wispr Flow) auto-pause
   speech while you talk and resume when you release
-- **54 voices** across 9 languages, all local
+- **54 voices** across 9 languages, all local — pick one from the menu bar
+  and it sticks
 - **A CLI** for scripts and pipes: `ktts say`, `ktts clip`, `cat notes.md | ktts say -`
 
 ## Requirements
