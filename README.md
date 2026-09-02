@@ -27,8 +27,9 @@ account, no network calls after install.
 - **TLDR mode** — toggle it on and agent replies are summarised before they
   are read, via the Claude CLI (no key needed), the Claude or ChatGPT API
   (your key, kept in the Keychain), or a local no-AI extractive summariser.
-  There is also a TL;DR button on the pill that summarises the last reply
-  straight into the reader.
+  `⌃⌥T` speaks a summary (with read-along), `⌃⌥⇧T` puts it in the reader, and
+  the pill's TL;DR button speaks it. Each summarises the staged reply if one
+  is waiting, otherwise your current selection.
 - **Silent RSVP reader** (`⌃⌥R`) — select text and read it word-by-word with
   no audio at all. Dims the whole screen down to a single centred word with
   its anchor letter pinned; hold `R` to advance, release to hold. Speed and
@@ -71,6 +72,8 @@ Claude Code / Codex if you want agent responses staged.
 | `⌃⌥X` | dismiss staged reply | stop |
 | `⌃⌥A` | toggle auto-read | toggle auto-read |
 | `⌃⌥R` | silent RSVP reader on the selection (hold `R` to read, `↑↓` speed, `←→` step, `esc` close) ||
+| `⌃⌥T` | TLDR, spoken aloud with read-along ||
+| `⌃⌥⇧T` | TLDR, in the full-screen RSVP reader ||
 
 ## CLI
 

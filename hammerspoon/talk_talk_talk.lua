@@ -6,6 +6,7 @@
 --   ⌃⌥S  speak selected text        ⌃⌥P  play staged reply / pause / resume
 --   ⌃⌥←  rewind 10s                 ⌃⌥X  dismiss staged reply / stop
 --   ⌃⌥A  toggle auto-read           ⌃⌥R  silent RSVP reader (hold R)
+--   ⌃⌥T  TLDR spoken               ⌃⌥⇧T TLDR in the RSVP reader
 
 local KOKORO_DIR = "@@KOKORO_DIR@@"
 local KTTS = KOKORO_DIR .. "/ktts"
@@ -106,25 +107,67 @@ local function dismissReady()
 end
 
 local tldrRunning = false
+local SELECTION_FILE = KOKORO_DIR .. "/selection.txt"
 
--- Summarise the staged reply, then hand it to the full-screen reader.
-local function tldrPendingToReader()
-  if tldrRunning then return end
-  tldrRunning = true
-  hs.alert.show("Summarising…", 1.2)
-  hs.task.new("/bin/sh", function(code, stdout, stderr)
-    tldrRunning = false
-    local summary = (stdout or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    if code == 0 and #summary > 0 then
-      if tttReadText then tttReadText(summary) end
-    else
-      hs.alert.show("TLDR failed: " .. ((stderr or ""):gsub("%s+$", "")), 4)
+-- Summarise, then either speak the summary or open it in the reader.
+-- Source is the staged reply when one is waiting, otherwise the selection.
+local function tldrThen(action)
+  if tldrRunning then
+    hs.alert.show("Already summarising…", 1)
+    return
+  end
+
+  local function summarise(sourceFile)
+    tldrRunning = true
+    hs.alert.show("Summarising…", 1.5)
+    hs.task.new("/bin/sh", function(code, stdout, stderr)
+      tldrRunning = false
+      local summary = (stdout or ""):gsub("^%s+", ""):gsub("%s+$", "")
+      if code ~= 0 or #summary == 0 then
+        hs.alert.show("TLDR failed: " .. ((stderr or ""):gsub("%s+$", "")), 4)
+        return
+      end
+      if action == "read" then
+        if tttReadText then tttReadText(summary) end
+      else
+        ktts("say", summary)  -- read-along follows automatically
+      end
+    end, { "-c", "'" .. TLDR_SCRIPT .. "' < '" .. sourceFile .. "'" }):start()
+  end
+
+  if currentState == "ready" then
+    summarise(PENDING_FILE)
+    return
+  end
+
+  -- no staged reply: summarise whatever is selected
+  local previous = hs.pasteboard.getContents()
+  local changeCount = hs.pasteboard.changeCount()
+  hs.eventtap.keyStroke({ "cmd" }, "c")
+  hs.timer.doAfter(0.25, function()
+    local selection = nil
+    if hs.pasteboard.changeCount() ~= changeCount then
+      selection = hs.pasteboard.getContents()
+      if previous then hs.pasteboard.setContents(previous) end
     end
-  end, { "-c", "'" .. TLDR_SCRIPT .. "' < '" .. PENDING_FILE .. "'" }):start()
+    if not selection or #selection == 0 then
+      hs.alert.show("Nothing staged and nothing selected")
+      return
+    end
+    local f = io.open(SELECTION_FILE, "w")
+    if not f then
+      hs.alert.show("Could not stage the selection")
+      return
+    end
+    f:write(selection)
+    f:close()
+    summarise(SELECTION_FILE)
+  end)
 end
 
 -- Exposed so a script, another hotkey, or a test can trigger it directly.
-tttTldrToReader = tldrPendingToReader
+tttTldrSpeak = function() tldrThen("speak") end
+tttTldrRead = function() tldrThen("read") end
 
 local AUTO_ON  = { red = 0.25, green = 0.80, blue = 0.35, alpha = 0.95 }
 local AUTO_OFF = { red = 1, green = 1, blue = 1, alpha = 0.30 }
@@ -236,7 +279,7 @@ local function buildPill()
       pillHidden = true
       pill:hide(0.15)
     elseif id == "tldr" then
-      tldrPendingToReader()
+      tldrThen("speak")
     elseif id == "back" then
       ktts("back")
     elseif id == "toggle" then
@@ -729,6 +772,12 @@ end
 -- Exposed so scripts (and `hs -c`) can drive or dismiss the reader.
 tttReadText = openReaderWith
 tttCloseReader = closeReader
+-- queryable so scripts (and tests) can tell whether the reader is up
+tttReaderStatus = function()
+  if not reader then return "closed" end
+  return string.format("open %d/%d: %s", readerIndex, #readerWords,
+                       tostring(readerWords[readerIndex]))
+end
 
 local function openReaderFromSelection()
   if reader then closeReader() return end
@@ -887,9 +936,14 @@ local function buildMenu()
     end,
   })
   table.insert(items, {
-    title = "TLDR the last reply → reader",
+    title = "TLDR → speak it",
     disabled = tldrRunning,
-    fn = tldrPendingToReader,
+    fn = function() tldrThen("speak") end,
+  })
+  table.insert(items, {
+    title = "TLDR → RSVP reader",
+    disabled = tldrRunning,
+    fn = function() tldrThen("read") end,
   })
 
   local PROVIDERS = {
@@ -1019,7 +1073,8 @@ local function buildMenu()
       .. "⌃⌥← rewind 10s\n⌃⌥X stop\n⌃⌥A auto-read\n"
       .. "⌃⌥R silent RSVP reader\n"
       .. "   in the reader: hold R to read · ↑↓ speed\n"
-      .. "   ←→ step a word · esc close", 6)
+      .. "   ←→ step a word · esc close\n"
+      .. "⌃⌥T TLDR spoken · ⌃⌥⇧T TLDR in the reader", 6)
   end })
   table.insert(items, { title = "Reset pill position", fn = function()
     hs.settings.clear("tttPillPos")
@@ -1050,6 +1105,8 @@ end)
 hs.hotkey.bind({ "ctrl", "alt" }, "a", toggleAutoRead)
 hs.hotkey.bind({ "ctrl", "alt" }, "left", function() ktts("back") end)
 hs.hotkey.bind({ "ctrl", "alt" }, "r", openReaderFromSelection)
+hs.hotkey.bind({ "ctrl", "alt" }, "t", function() tldrThen("speak") end)
+hs.hotkey.bind({ "ctrl", "alt", "shift" }, "t", function() tldrThen("read") end)
 
 -- Auto-pause while dictating (hold-Fn, e.g. Wispr Flow): pause speech when
 -- the Fn key goes down, resume where it left off when it is released.
