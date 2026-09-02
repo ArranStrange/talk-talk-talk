@@ -26,6 +26,17 @@ import time
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
 SOCK_PATH = os.path.join(HERE, "daemon.sock")
 STATE_PATH = os.path.join(HERE, "state")
+WORD_PATH = os.path.join(HERE, "word")
+
+
+def set_word(word):
+    """Publish the currently-spoken word for the RSVP drawer."""
+    try:
+        with open(WORD_PATH + ".tmp", "w") as f:
+            f.write(word)
+        os.replace(WORD_PATH + ".tmp", WORD_PATH)
+    except OSError:
+        pass
 
 
 def find_espeak():
@@ -90,6 +101,7 @@ paused = False
 say_active = False
 playing_started = False
 stream = None
+timeline = []                           # [(sample_start, word)] for RSVP
 
 
 def split_chunks(text, max_len=300, first_max_len=100):
@@ -130,8 +142,39 @@ def smooth_edges(samples):
     return samples
 
 
+def word_weights(words):
+    """Rough relative duration per word: syllable-ish count plus a pause
+    bonus for trailing punctuation. Good to about a quarter second, and
+    resynced at every chunk boundary so error never accumulates."""
+    weights = []
+    for w in words:
+        vowel_groups = len(re.findall(r"[aeiouyAEIOUY]+", w))
+        weight = float(max(1, vowel_groups))
+        if re.search(r"[.,!?;:]$", w):
+            weight += 0.4
+        weights.append(weight)
+    return weights
+
+
+def build_timeline(chunk_text, start_sample, n_samples, lead_gap):
+    """Distribute a chunk's samples across its words, proportional to
+    estimated duration. Returns [(sample_start, word)]."""
+    words = chunk_text.split()
+    if not words:
+        return []
+    weights = word_weights(words)
+    total = sum(weights)
+    speech_start = start_sample + lead_gap
+    speech_samples = max(1, n_samples - lead_gap)
+    entries, acc = [], 0.0
+    for word, weight in zip(words, weights):
+        entries.append((int(speech_start + speech_samples * acc / total), word))
+        acc += weight
+    return entries
+
+
 def synth_worker(gen, text, voice, speed, lang):
-    global buffer, buf_len, synth_done
+    global buffer, buf_len, synth_done, timeline
     first = True
     for chunk in split_chunks(text):
         with lock:
@@ -142,7 +185,9 @@ def synth_worker(gen, text, voice, speed, lang):
         except Exception:
             continue
         samples = smooth_edges(np.asarray(samples, dtype=np.float32))
+        lead_gap = 0
         if not first:
+            lead_gap = CHUNK_GAP
             samples = np.concatenate(
                 [np.zeros(CHUNK_GAP, dtype=np.float32), samples])
         first = False
@@ -159,6 +204,7 @@ def synth_worker(gen, text, voice, speed, lang):
             if generation != gen:
                 return
             buffer[buf_len:buf_len + n] = samples
+            timeline.extend(build_timeline(chunk, buf_len, n, lead_gap))
             buf_len += n
     with lock:
         if generation == gen:
@@ -214,6 +260,30 @@ def make_finished(gen):
     return finished
 
 
+def word_publisher(gen):
+    """Map the playback cursor onto the word timeline and publish changes.
+
+    Read-only with respect to playback, so RSVP can never disturb audio.
+    """
+    import bisect
+
+    last = None
+    while True:
+        with lock:
+            if generation != gen or not say_active:
+                break
+            starts = [t[0] for t in timeline]
+            pos = cursor
+            entries = timeline
+            idx = bisect.bisect_right(starts, pos) - 1
+            word = entries[idx][1] if idx >= 0 else None
+        if word != last:
+            last = word
+            set_word(word or "")
+        time.sleep(0.08)
+    set_word("")
+
+
 def player_worker(gen):
     """Wait for the first synthesized samples, then start the stream."""
     global stream, playing_started
@@ -245,13 +315,14 @@ def player_worker(gen):
 
 def stop_playback():
     global generation, buf_len, cursor, synth_done, paused, say_active
-    global playing_started, stream
+    global playing_started, stream, timeline
     with lock:
         generation += 1
         old_stream = stream
         stream = None
         buf_len = 0
         cursor = 0
+        timeline = []
         synth_done = True
         paused = False
         say_active = False
@@ -285,6 +356,7 @@ def handle(req):
             daemon=True,
         ).start()
         threading.Thread(target=player_worker, args=(gen,), daemon=True).start()
+        threading.Thread(target=word_publisher, args=(gen,), daemon=True).start()
         return {"ok": True, "msg": "speaking"}
     if cmd == "stop":
         stop_playback()

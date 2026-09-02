@@ -17,6 +17,9 @@ account, no network calls after install.
   immediately in auto mode (`⌃⌥A`)
 - **Real transport controls** — instant pause/resume (sample-exact) and
   10-second rollback to re-hear a section (`⌃⌥←`)
+- **Read-along mode** — click `▾` and the pill drops a drawer showing each
+  word as it is spoken (RSVP style), so you can follow by eye; see
+  [docs/RSVP-SPEC.md](docs/RSVP-SPEC.md)
 - **Dictation-aware** — hold-Fn dictation tools (e.g. Wispr Flow) auto-pause
   speech while you talk and resume when you release
 - **54 voices** across 9 languages, all local

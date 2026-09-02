@@ -66,6 +66,9 @@ local fnHeld = false        -- Fn key currently down (dictation)
 local fnAutoPaused = false  -- we paused because of Fn, so we may auto-resume
 local pillHidden = false    -- ✕ clicked: stay hidden until the next event
 local lastSeenState = "idle"
+local rsvpOn = hs.settings.get("tttRsvp") or false
+local WORD_FILE = KOKORO_DIR .. "/word"
+local PILL_H, DRAWER_H = 36, 92
 
 local function playPending()
   hs.task.new("/bin/sh", nil,
@@ -86,6 +89,19 @@ local function toggleAutoRead()
   hs.alert.show(autoRead and "Auto-read: ON" or "Auto-read: OFF")
   if pill then pill[6].textColor = autoRead and AUTO_ON or AUTO_OFF end
   if autoRead and currentState == "ready" then playPending() end
+end
+
+local updatePillRef = nil  -- set once updatePill is defined below
+local updateWordRef = nil  -- set once updateWord is defined below
+local wordTimer = nil
+local lastWord = nil
+
+local function toggleRsvp()
+  rsvpOn = not rsvpOn
+  hs.settings.set("tttRsvp", rsvpOn)
+  hs.alert.show(rsvpOn and "Read-along: ON" or "Read-along: OFF")
+  if pill then pill[14].textColor = rsvpOn and AUTO_ON or AUTO_OFF end
+  if updatePillRef then updatePillRef() end
 end
 
 local WAVE_BARS = 5
@@ -144,10 +160,21 @@ local function buildPill()
                text = "✕", textSize = 13, textAlignment = "center",
                textColor = { red = 1, green = 1, blue = 1, alpha = 0.45 },
                trackMouseDown = true, id = "close" }
+  pill[14] = { type = "text", frame = { x = 0, y = 7, w = 22, h = 22 },
+               text = "▾", textSize = 15, textAlignment = "center",
+               textColor = rsvpOn and AUTO_ON or AUTO_OFF,
+               trackMouseDown = true, id = "rsvp" }
+  -- RSVP drawer: the currently-spoken word, shown while the pill is tall
+  pill[15] = { type = "text", action = "skip",
+               frame = { x = 10, y = 46, w = 252, h = 38 },
+               text = "", textSize = 26, textAlignment = "center",
+               textColor = { red = 1, green = 1, blue = 1, alpha = 0.95 } }
   pill:mouseCallback(function(_, event, id)
     if event ~= "mouseDown" then return end
     if id == "auto" then
       toggleAutoRead()
+    elseif id == "rsvp" then
+      toggleRsvp()
     elseif id == "close" then
       pillHidden = true
       pill:hide(0.15)
@@ -197,16 +224,56 @@ local function layoutPill(st)
   local backX  = autoX + 46
   local togX   = backX + 30
   local stopX  = togX + 32
-  local closeX = stopX + 30
+  local rsvpX  = stopX + 30
+  local closeX = rsvpX + 22
   local w      = closeX + 22 + 8
   pill[3].frame  = { x = 36, y = 8, w = cw, h = 20 }
   pill[6].frame  = { x = autoX, y = 11, w = 42, h = 16 }
   pill[12].frame = { x = backX, y = 6, w = 30, h = 26 }
   pill[4].frame  = { x = togX, y = 5, w = 32, h = 26 }
   pill[5].frame  = { x = stopX, y = 5, w = 32, h = 26 }
+  pill[14].frame = { x = rsvpX, y = 7, w = 22, h = 22 }
   pill[13].frame = { x = closeX, y = 8, w = 22, h = 20 }
+  -- the drawer drops downward, so the control row never moves
+  local drawerOpen = rsvpOn and (st == "playing" or st == "paused")
+  local h = drawerOpen and DRAWER_H or PILL_H
+  pill[15].frame = { x = 10, y = 46, w = w - 20, h = 38 }
+  pill[15].action = drawerOpen and "fill" or "skip"
+  -- poll the word file while the drawer is open: pathwatcher coalesces
+  -- events with ~300ms latency, which is a visible lag at speech pace
+  if drawerOpen and not wordTimer then
+    wordTimer = hs.timer.doEvery(0.06, updateWordRef)
+  elseif not drawerOpen and wordTimer then
+    wordTimer:stop()
+    wordTimer = nil
+    lastWord = nil
+  end
   local f = pill:frame()
-  pill:frame({ x = f.x + (f.w - w), y = f.y, w = w, h = f.h })
+  pill:frame({ x = f.x + (f.w - w), y = f.y, w = w, h = h })
+end
+
+local function readWord()
+  local f = io.open(WORD_FILE, "r")
+  if not f then return "" end
+  local w = f:read("*a") or ""
+  f:close()
+  return (w:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- Render the current word in the drawer: shrink long words to fit, and
+-- dim while paused so it reads as held rather than live.
+local function updateWord()
+  if not pill or not rsvpOn then return end
+  if currentState ~= "playing" and currentState ~= "paused" then return end
+  local word = readWord()
+  if word == lastWord then return end
+  lastWord = word
+  pill[15].text = word
+  local size = 26
+  if #word > 12 then size = math.max(14, math.floor(26 * 12 / #word)) end
+  pill[15].textSize = size
+  pill[15].textColor = { red = 1, green = 1, blue = 1,
+                         alpha = (currentState == "paused") and 0.5 or 0.95 }
 end
 
 local function readState()
@@ -271,6 +338,8 @@ local function updatePill()
   pill[5].textColor.alpha = (st ~= "loading") and 0.95 or 0.25
   pill[6].textColor = autoRead and AUTO_ON or AUTO_OFF
   pill[12].textColor.alpha = (st == "playing" or st == "paused") and 0.95 or 0.25
+  pill[14].textColor = rsvpOn and AUTO_ON or AUTO_OFF
+  updateWord()
   pill:show(0.2)
   if st == "ready" then
     if autoRead then
@@ -286,6 +355,9 @@ local function updatePill()
     autoPlayFired = false
   end
 end
+
+updatePillRef = updatePill
+updateWordRef = updateWord
 
 tttPathWatcher = hs.pathwatcher.new(KOKORO_DIR, function(files)
   for _, f in ipairs(files) do

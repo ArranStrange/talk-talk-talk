@@ -1,5 +1,11 @@
 # RSVP Reading Mode — Spec
 
+> **Status: implemented.** One deviation from the plan below: the pill
+> polls the `word` file every 60 ms while the drawer is open instead of
+> relying on `hs.pathwatcher`. FSEvents coalesces changes with ~300 ms
+> latency, which showed up in testing as the drawer running a full word
+> behind the audio. The pathwatcher still drives state changes.
+
 ## Summary
 
 A toggleable drawer that drops down below the pill while speech is playing,
