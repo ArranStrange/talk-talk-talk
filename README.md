@@ -25,7 +25,9 @@ account, no network calls after install.
   and pinned so your eye never travels; see
   [docs/RSVP-SPEC.md](docs/RSVP-SPEC.md)
 - **Silent RSVP reader** (`⌃⌥R`) — select text and read it word-by-word with
-  no audio at all: hold `R` to advance, release to hold, `↑`/`↓` for speed
+  no audio at all. Dims the whole screen down to a single centred word with
+  its anchor letter pinned; hold `R` to advance, release to hold. Speed and
+  position live in the menu bar so nothing competes with the word.
 - **Dictation-aware** — hold-Fn dictation tools (e.g. Wispr Flow) auto-pause
   speech while you talk and resume when you release
 - **54 voices** across 9 languages, all local — pick one from the menu bar

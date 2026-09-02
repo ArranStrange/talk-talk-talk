@@ -434,12 +434,13 @@ end):start()
 updatePill()
 
 -- ---------------------------------------------------------------------------
--- Silent RSVP reader — no speech at all. ⌃⌥R takes the selection and opens
--- a reading panel; hold R to advance, release to hold. Speed in words per
--- minute, adjustable live.
+-- Silent RSVP reader — no speech at all. ⌃⌥R takes the selection and dims
+-- the screen down to a single centred word; hold R to advance. Speed and
+-- key reference live in the menu bar, so nothing competes with the word.
 -- ---------------------------------------------------------------------------
 
-local reader = nil
+local reader = nil          -- canvas on the reading screen
+local dimmers = {}          -- one per other screen, so focus is total
 local readerWords = {}
 local readerIndex = 1
 local readerTimer = nil
@@ -448,14 +449,16 @@ local rHeld = false
 local rHoldStart = 0
 local readerWpm = hs.settings.get("tttReaderWpm") or 350
 
-local R_W, R_H = 660, 240
-local R_ORP_X = 0.42
-local R_SIZE = 46
+local R_ORP_X = 0.42        -- fixation point, as a fraction of screen width
+local R_SIZE = 64
+local DIM = { red = 0.02, green = 0.02, blue = 0.03, alpha = 0.94 }
 
 local function closeReader()
   if readerTimer then readerTimer:stop() readerTimer = nil end
   if readerTap then readerTap:stop() readerTap = nil end
   if reader then reader:delete() reader = nil end
+  for _, d in ipairs(dimmers) do d:delete() end
+  dimmers = {}
   rHeld = false
 end
 
@@ -465,7 +468,7 @@ local function wordDelay(word)
   local base = 60.0 / readerWpm
   local lengthFactor = math.max(0.7, math.min(1.8, 0.7 + #word / 12))
   local punctFactor = 1.0
-  if word:match("[.!?]['\"]?$") then punctFactor = 2.0
+  if word:match("[.!?][\'\"]?$") then punctFactor = 2.0
   elseif word:match("[,;:]$") then punctFactor = 1.4 end
   return base * lengthFactor * punctFactor
 end
@@ -474,7 +477,9 @@ local function renderReaderWord()
   if not reader then return end
   local word = readerWords[readerIndex]
   if not word then return end
-  local anchorX = R_W * R_ORP_X
+  local f = reader:frame()
+  local anchorX = f.w * R_ORP_X
+  local midY = f.h / 2
   local orp = orpIndex(#word)
   local pre, anchor = word:sub(1, orp - 1), word:sub(orp, orp)
 
@@ -482,9 +487,9 @@ local function renderReaderWord()
   local leftNeed = measure(pre, size) + measure(anchor, size) / 2
   local rightNeed = measure(word, size) - leftNeed
   local scale = math.min(1,
-    leftNeed > 0 and (anchorX - 24) / leftNeed or 1,
-    rightNeed > 0 and (R_W - anchorX - 24) / rightNeed or 1)
-  if scale < 1 then size = math.max(16, math.floor(size * scale)) end
+    leftNeed > 0 and (anchorX - 40) / leftNeed or 1,
+    rightNeed > 0 and (f.w - anchorX - 40) / rightNeed or 1)
+  if scale < 1 then size = math.max(20, math.floor(size * scale)) end
 
   local styled = hs.styledtext.new(word, {
     font = { name = RSVP_FONT, size = size },
@@ -493,11 +498,13 @@ local function renderReaderWord()
 
   local offset = measure(pre, size) + measure(anchor, size) / 2
   reader[4].text = styled
-  reader[4].frame = { x = anchorX - offset, y = 78, w = R_W, h = 70 }
-  reader[7].text = string.format("%d wpm   ·   %d / %d",
-    readerWpm, readerIndex, #readerWords)
-  reader[8].frame = { x = 0, y = R_H - 4,
-                      w = R_W * (readerIndex / math.max(#readerWords, 1)), h = 4 }
+  reader[4].frame = { x = anchorX - offset, y = midY - size * 0.72,
+                      w = f.w, h = size * 1.5 }
+  -- guides hug the line wherever it sits
+  reader[2].frame = { x = anchorX - 1, y = midY - size * 0.95, w = 2, h = 14 }
+  reader[3].frame = { x = anchorX - 1, y = midY + size * 0.62, w = 2, h = 14 }
+  reader[5].frame = { x = 0, y = f.h - 3,
+                      w = f.w * (readerIndex / math.max(#readerWords, 1)), h = 3 }
 end
 
 local function advance()
@@ -506,10 +513,7 @@ local function advance()
   if rHeld and (os.time() - rHoldStart) > 20 then
     rHeld = false  -- missed key-up; do not hold the keyboard hostage
   end
-  if readerIndex >= #readerWords then
-    reader[6].text = "End  ·  esc to close"
-    return
-  end
+  if readerIndex >= #readerWords then return end
   readerIndex = readerIndex + 1
   renderReaderWord()
   if rHeld then
@@ -521,47 +525,48 @@ local function startAdvancing()
   if readerTimer or not reader then return end
   rHoldStart = os.time()
   if readerIndex >= #readerWords then return end
-  reader[6].text = "reading…"
   readerTimer = hs.timer.doAfter(wordDelay(readerWords[readerIndex]), advance)
 end
 
 local function stopAdvancing()
   if readerTimer then readerTimer:stop() readerTimer = nil end
-  if reader then reader[6].text = "hold R to read  ·  ↑↓ speed  ·  ←→ step  ·  esc" end
 end
 
 local function buildReader()
-  local scr = hs.screen.mainScreen():frame()
-  reader = hs.canvas.new({ x = scr.x + (scr.w - R_W) / 2,
-                           y = scr.y + (scr.h - R_H) / 2 - 60,
-                           w = R_W, h = R_H })
+  local active = hs.mouse.getCurrentScreen() or hs.screen.mainScreen()
+  -- dim every other screen too, so nothing bright pulls the eye away
+  for _, scr in ipairs(hs.screen.allScreens()) do
+    if scr:id() ~= active:id() then
+      local sf = scr:fullFrame()
+      local d = hs.canvas.new(sf)
+      d:level(hs.canvas.windowLevels.modalPanel)
+      d:behavior({ "canJoinAllSpaces", "stationary" })
+      d:clickActivating(false)
+      d[1] = { type = "rectangle", action = "fill", frame = { x = 0, y = 0, w = sf.w, h = sf.h },
+               fillColor = DIM }
+      d:show(0.12)
+      dimmers[#dimmers + 1] = d
+    end
+  end
+
+  local f = active:fullFrame()
+  reader = hs.canvas.new(f)
   reader:level(hs.canvas.windowLevels.modalPanel)
   reader:behavior({ "canJoinAllSpaces", "stationary" })
   reader:clickActivating(false)
   reader[1] = { type = "rectangle", action = "fill",
-                roundedRectRadii = { xRadius = 20, yRadius = 20 },
-                fillColor = { red = 0.06, green = 0.06, blue = 0.08, alpha = 1 } }
-  -- fixation guides above and below the anchor letter
+                frame = { x = 0, y = 0, w = f.w, h = f.h }, fillColor = DIM }
   reader[2] = { type = "rectangle", action = "fill",
-                frame = { x = R_W * R_ORP_X - 1, y = 62, w = 2, h = 12 },
-                fillColor = { white = 1, alpha = 0.28 } }
+                frame = { x = 0, y = 0, w = 2, h = 14 },
+                fillColor = { white = 1, alpha = 0.3 } }
   reader[3] = { type = "rectangle", action = "fill",
-                frame = { x = R_W * R_ORP_X - 1, y = 150, w = 2, h = 12 },
-                fillColor = { white = 1, alpha = 0.28 } }
-  reader[4] = { type = "text", text = "", frame = { x = 0, y = 78, w = R_W, h = 70 },
+                frame = { x = 0, y = 0, w = 2, h = 14 },
+                fillColor = { white = 1, alpha = 0.3 } }
+  reader[4] = { type = "text", text = "", frame = { x = 0, y = 0, w = f.w, h = 100 },
                 textAlignment = "left" }
-  reader[5] = { type = "text", text = "READER", textSize = 11,
-                frame = { x = 0, y = 18, w = R_W, h = 16 }, textAlignment = "center",
-                textColor = { white = 1, alpha = 0.35 } }
-  reader[6] = { type = "text", text = "", textSize = 12,
-                frame = { x = 0, y = R_H - 46, w = R_W, h = 18 },
-                textAlignment = "center", textColor = { white = 1, alpha = 0.45 } }
-  reader[7] = { type = "text", text = "", textSize = 12,
-                frame = { x = 0, y = R_H - 28, w = R_W, h = 18 },
-                textAlignment = "center", textColor = { white = 1, alpha = 0.6 } }
-  reader[8] = { type = "rectangle", action = "fill",
-                frame = { x = 0, y = R_H - 4, w = 0, h = 4 },
-                fillColor = { red = 1, green = 0.36, blue = 0.30, alpha = 0.9 } }
+  reader[5] = { type = "rectangle", action = "fill",
+                frame = { x = 0, y = f.h - 3, w = 0, h = 3 },
+                fillColor = { red = 1, green = 0.36, blue = 0.30, alpha = 0.85 } }
   reader:show(0.12)
 end
 
@@ -588,12 +593,12 @@ local function startReaderTap()
       elseif (key == "up" or key == "=") and down then
         readerWpm = math.min(1200, readerWpm + 25)
         hs.settings.set("tttReaderWpm", readerWpm)
-        renderReaderWord()
+        hs.alert.show(readerWpm .. " wpm", 0.6)
         return true
       elseif (key == "down" or key == "-") and down then
         readerWpm = math.max(100, readerWpm - 25)
         hs.settings.set("tttReaderWpm", readerWpm)
-        renderReaderWord()
+        hs.alert.show(readerWpm .. " wpm", 0.6)
         return true
       elseif key == "left" and down then
         readerIndex = math.max(1, readerIndex - 1)
@@ -620,7 +625,6 @@ local function openReaderWith(text)
   readerIndex = 1
   buildReader()
   renderReaderWord()
-  stopAdvancing()  -- shows the hint line
   startReaderTap()
 end
 
@@ -748,6 +752,28 @@ local function buildMenu()
                         fn = function()
                           openReaderWith(hs.pasteboard.getContents() or "")
                         end })
+
+  local wpmMenu = {}
+  for _, wpm in ipairs({ 200, 250, 300, 350, 400, 500, 600, 800 }) do
+    table.insert(wpmMenu, {
+      title = wpm .. " wpm",
+      checked = (readerWpm == wpm),
+      fn = function()
+        readerWpm = wpm
+        hs.settings.set("tttReaderWpm", wpm)
+      end,
+    })
+  end
+  table.insert(items, {
+    title = "Reader speed (" .. readerWpm .. " wpm)",
+    menu = wpmMenu,
+  })
+  if reader then
+    table.insert(items, {
+      title = string.format("Reader position: %d / %d", readerIndex, #readerWords),
+      disabled = true,
+    })
+  end
   table.insert(items, { title = "-" })
   table.insert(items, { title = "Auto-read replies", checked = autoRead,
                         fn = toggleAutoRead })
@@ -794,7 +820,9 @@ local function buildMenu()
   table.insert(items, { title = "Hotkeys…", fn = function()
     hs.alert.show("⌃⌥S speak selection\n⌃⌥P play / pause\n"
       .. "⌃⌥← rewind 10s\n⌃⌥X stop\n⌃⌥A auto-read\n"
-      .. "⌃⌥R silent RSVP reader (hold R to read)", 5)
+      .. "⌃⌥R silent RSVP reader\n"
+      .. "   in the reader: hold R to read · ↑↓ speed\n"
+      .. "   ←→ step a word · esc close", 6)
   end })
   table.insert(items, { title = "Reset pill position", fn = function()
     hs.settings.clear("tttPillPos")
