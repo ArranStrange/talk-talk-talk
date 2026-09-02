@@ -925,8 +925,10 @@ local function buildMenu()
                    summarising = "Summarising…" })[st] or st,
         disabled = true })
 
-  -- 2. the one switch worth reaching for first ------------------------------
+  -- 2. the switches worth reaching for first --------------------------------
   sep()
+  add({ title = "Auto-read AI Responses", checked = autoRead,
+        fn = toggleAutoRead })
   add({ title = "TLDR — summarise before reading",
         checked = tcfg.tldr_replies == true, fn = toggleTldr })
 
@@ -964,7 +966,6 @@ local function buildMenu()
         fn = function() playPending("speak") end })
   add({ title = "Last reply → reader", disabled = st ~= "ready",
         fn = function() playPending("reader") end })
-  add({ title = "Auto-read replies", checked = autoRead, fn = toggleAutoRead })
 
   -- 5. RSVP ------------------------------------------------------------------
   sep()
