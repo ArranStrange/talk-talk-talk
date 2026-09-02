@@ -1015,6 +1015,19 @@ local function buildMenu()
     hs.pasteboard.setContents("ttt-set-key anthropic")
     hs.alert.show("Command copied — paste it in Terminal.\nYour key is typed straight into the Keychain.", 5)
   end })
+  table.insert(provMenu, { title = "Set Claude workspace id…", fn = function()
+    local c = readCfg()
+    local btn, val = hs.dialog.textPrompt("Claude workspace id",
+      "Identity-linked API keys must name a workspace.\n"
+      .. "Find it in console.anthropic.com → Settings → Workspaces (wrkspc_…):",
+      c.anthropic_workspace_id or "", "Save", "Cancel")
+    if btn == "Save" and val then
+      val = val:gsub("^%s+", ""):gsub("%s+$", "")
+      c.anthropic_workspace_id = (#val > 0) and val or nil
+      writeCfg(c)
+      hs.alert.show(#val > 0 and ("Workspace: " .. val) or "Workspace id cleared")
+    end
+  end })
   table.insert(provMenu, { title = "Store ChatGPT API key…", fn = function()
     hs.pasteboard.setContents("ttt-set-key openai")
     hs.alert.show("Command copied — paste it in Terminal.\nYour key is typed straight into the Keychain.", 5)

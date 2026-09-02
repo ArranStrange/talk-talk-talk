@@ -89,6 +89,12 @@ def post_json(url, headers, payload, timeout=90):
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
+        if "anthropic-workspace-id is required" in detail:
+            raise RuntimeError(
+                "this Anthropic key is identity-linked and needs a workspace "
+                "id. Find it in console.anthropic.com > Settings > Workspaces "
+                "(it looks like wrkspc_...) and set anthropic_workspace_id in "
+                "config.json, or use the menu bar item.") from None
         raise RuntimeError(f"HTTP {e.code}: {detail}") from None
     except urllib.error.URLError as e:
         raise RuntimeError(f"network error: {e.reason}") from None
@@ -98,9 +104,16 @@ def via_anthropic(text, model, sentences):
     key = api_key("anthropic")
     if not key:
         raise RuntimeError("no Anthropic API key stored (see: ttt-set-key anthropic)")
+    headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    # Identity-linked keys must name the workspace the request acts in.
+    # Not a secret, so it lives in config.json rather than the Keychain.
+    workspace = (os.environ.get("ANTHROPIC_WORKSPACE_ID")
+                 or config().get("anthropic_workspace_id") or "").strip()
+    if workspace:
+        headers["anthropic-workspace-id"] = workspace
     data = post_json(
         "https://api.anthropic.com/v1/messages",
-        {"x-api-key": key, "anthropic-version": "2023-06-01"},
+        headers,
         {"model": model or DEFAULT_MODEL["anthropic"],
          "max_tokens": 400,
          "messages": [{"role": "user", "content": prompt_for(text, sentences)}]})
