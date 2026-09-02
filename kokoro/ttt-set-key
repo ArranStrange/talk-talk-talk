@@ -7,12 +7,42 @@
 set -euo pipefail
 
 case "${1:-}" in
-  anthropic) svc=ttt-anthropic; label="Anthropic (Claude)" ;;
-  openai)    svc=ttt-openai;    label="OpenAI (ChatGPT)" ;;
+  anthropic) svc=ttt-anthropic; label="Anthropic (Claude)"; prefix="sk-ant-"; min=95 ;;
+  openai)    svc=ttt-openai;    label="OpenAI (ChatGPT)";   prefix="sk-";     min=48 ;;
   *) echo "usage: ttt-set-key anthropic|openai"; exit 1 ;;
 esac
 
 echo "Storing an API key for $label."
 echo "Paste it at the prompt below — it will not be shown as you type."
 security add-generic-password -U -a talk-talk-talk -s "$svc" -w
-echo "Saved to your Keychain. Talk Talk Talk will read it from there."
+
+# Sanity-check the shape of what landed, without ever showing it. A key
+# truncated on paste is otherwise indistinguishable from a wrong key: it
+# authenticates as "incorrect API key" with no hint that it is merely short.
+stored=$(security find-generic-password -a talk-talk-talk -s "$svc" -w 2>/dev/null || true)
+len=${#stored}
+echo ""
+echo "Saved to your Keychain ($len characters)."
+
+if [ "$len" -eq 0 ]; then
+  echo "WARNING: nothing was stored."
+  exit 1
+fi
+case "$stored" in
+  "$prefix"*) ;;
+  *) echo "WARNING: does not start with '$prefix' — is this the right key?" ;;
+esac
+if [ "$len" -lt "$min" ]; then
+  echo "WARNING: that looks short for a $label key (expected at least $min"
+  echo "characters). A partial copy is the usual cause — use the Console's"
+  echo "copy button rather than selecting the text by hand, and re-run this."
+fi
+case "$stored" in
+  sk-proj-*)
+    if [ "$len" -lt 150 ]; then
+      echo "WARNING: OpenAI project keys (sk-proj-…) are normally 156-164"
+      echo "characters; this one is $len, so it is very likely truncated."
+    fi
+    ;;
+esac
+echo "Talk Talk Talk will read it from the Keychain when it needs it."
