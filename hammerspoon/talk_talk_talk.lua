@@ -5,7 +5,7 @@
 -- Hotkeys:
 --   ⌃⌥S  speak selected text        ⌃⌥P  play staged reply / pause / resume
 --   ⌃⌥←  rewind 10s                 ⌃⌥X  dismiss staged reply / stop
---   ⌃⌥A  toggle auto-read
+--   ⌃⌥A  toggle auto-read           ⌃⌥R  silent RSVP reader (hold R)
 
 local KOKORO_DIR = "@@KOKORO_DIR@@"
 local KTTS = KOKORO_DIR .. "/ktts"
@@ -434,6 +434,220 @@ end):start()
 updatePill()
 
 -- ---------------------------------------------------------------------------
+-- Silent RSVP reader — no speech at all. ⌃⌥R takes the selection and opens
+-- a reading panel; hold R to advance, release to hold. Speed in words per
+-- minute, adjustable live.
+-- ---------------------------------------------------------------------------
+
+local reader = nil
+local readerWords = {}
+local readerIndex = 1
+local readerTimer = nil
+local readerTap = nil
+local rHeld = false
+local rHoldStart = 0
+local readerWpm = hs.settings.get("tttReaderWpm") or 350
+
+local R_W, R_H = 660, 240
+local R_ORP_X = 0.42
+local R_SIZE = 46
+
+local function closeReader()
+  if readerTimer then readerTimer:stop() readerTimer = nil end
+  if readerTap then readerTap:stop() readerTap = nil end
+  if reader then reader:delete() reader = nil end
+  rHeld = false
+end
+
+-- Per-word dwell. Longer words need longer, and punctuation earns a beat;
+-- the factors average out near 1 so the stated WPM stays roughly honest.
+local function wordDelay(word)
+  local base = 60.0 / readerWpm
+  local lengthFactor = math.max(0.7, math.min(1.8, 0.7 + #word / 12))
+  local punctFactor = 1.0
+  if word:match("[.!?]['\"]?$") then punctFactor = 2.0
+  elseif word:match("[,;:]$") then punctFactor = 1.4 end
+  return base * lengthFactor * punctFactor
+end
+
+local function renderReaderWord()
+  if not reader then return end
+  local word = readerWords[readerIndex]
+  if not word then return end
+  local anchorX = R_W * R_ORP_X
+  local orp = orpIndex(#word)
+  local pre, anchor = word:sub(1, orp - 1), word:sub(orp, orp)
+
+  local size = R_SIZE
+  local leftNeed = measure(pre, size) + measure(anchor, size) / 2
+  local rightNeed = measure(word, size) - leftNeed
+  local scale = math.min(1,
+    leftNeed > 0 and (anchorX - 24) / leftNeed or 1,
+    rightNeed > 0 and (R_W - anchorX - 24) / rightNeed or 1)
+  if scale < 1 then size = math.max(16, math.floor(size * scale)) end
+
+  local styled = hs.styledtext.new(word, {
+    font = { name = RSVP_FONT, size = size },
+    color = { white = 1, alpha = 0.97 },
+  }):setStyle({ color = ORP_COLOR }, orp, orp)
+
+  local offset = measure(pre, size) + measure(anchor, size) / 2
+  reader[4].text = styled
+  reader[4].frame = { x = anchorX - offset, y = 78, w = R_W, h = 70 }
+  reader[7].text = string.format("%d wpm   ·   %d / %d",
+    readerWpm, readerIndex, #readerWords)
+  reader[8].frame = { x = 0, y = R_H - 4,
+                      w = R_W * (readerIndex / math.max(#readerWords, 1)), h = 4 }
+end
+
+local function advance()
+  readerTimer = nil
+  if not reader then return end
+  if rHeld and (os.time() - rHoldStart) > 20 then
+    rHeld = false  -- missed key-up; do not hold the keyboard hostage
+  end
+  if readerIndex >= #readerWords then
+    reader[6].text = "End  ·  esc to close"
+    return
+  end
+  readerIndex = readerIndex + 1
+  renderReaderWord()
+  if rHeld then
+    readerTimer = hs.timer.doAfter(wordDelay(readerWords[readerIndex]), advance)
+  end
+end
+
+local function startAdvancing()
+  if readerTimer or not reader then return end
+  rHoldStart = os.time()
+  if readerIndex >= #readerWords then return end
+  reader[6].text = "reading…"
+  readerTimer = hs.timer.doAfter(wordDelay(readerWords[readerIndex]), advance)
+end
+
+local function stopAdvancing()
+  if readerTimer then readerTimer:stop() readerTimer = nil end
+  if reader then reader[6].text = "hold R to read  ·  ↑↓ speed  ·  ←→ step  ·  esc" end
+end
+
+local function buildReader()
+  local scr = hs.screen.mainScreen():frame()
+  reader = hs.canvas.new({ x = scr.x + (scr.w - R_W) / 2,
+                           y = scr.y + (scr.h - R_H) / 2 - 60,
+                           w = R_W, h = R_H })
+  reader:level(hs.canvas.windowLevels.modalPanel)
+  reader:behavior({ "canJoinAllSpaces", "stationary" })
+  reader:clickActivating(false)
+  reader[1] = { type = "rectangle", action = "fill",
+                roundedRectRadii = { xRadius = 20, yRadius = 20 },
+                fillColor = { red = 0.06, green = 0.06, blue = 0.08, alpha = 1 } }
+  -- fixation guides above and below the anchor letter
+  reader[2] = { type = "rectangle", action = "fill",
+                frame = { x = R_W * R_ORP_X - 1, y = 62, w = 2, h = 12 },
+                fillColor = { white = 1, alpha = 0.28 } }
+  reader[3] = { type = "rectangle", action = "fill",
+                frame = { x = R_W * R_ORP_X - 1, y = 150, w = 2, h = 12 },
+                fillColor = { white = 1, alpha = 0.28 } }
+  reader[4] = { type = "text", text = "", frame = { x = 0, y = 78, w = R_W, h = 70 },
+                textAlignment = "left" }
+  reader[5] = { type = "text", text = "READER", textSize = 11,
+                frame = { x = 0, y = 18, w = R_W, h = 16 }, textAlignment = "center",
+                textColor = { white = 1, alpha = 0.35 } }
+  reader[6] = { type = "text", text = "", textSize = 12,
+                frame = { x = 0, y = R_H - 46, w = R_W, h = 18 },
+                textAlignment = "center", textColor = { white = 1, alpha = 0.45 } }
+  reader[7] = { type = "text", text = "", textSize = 12,
+                frame = { x = 0, y = R_H - 28, w = R_W, h = 18 },
+                textAlignment = "center", textColor = { white = 1, alpha = 0.6 } }
+  reader[8] = { type = "rectangle", action = "fill",
+                frame = { x = 0, y = R_H - 4, w = 0, h = 4 },
+                fillColor = { red = 1, green = 0.36, blue = 0.30, alpha = 0.9 } }
+  reader:show(0.12)
+end
+
+-- While the panel is open it owns R, the arrows and escape; everything else
+-- passes through untouched so the machine is still usable.
+local function startReaderTap()
+  readerTap = hs.eventtap.new(
+    { hs.eventtap.event.types.keyDown, hs.eventtap.event.types.keyUp },
+    function(e)
+      if not reader then return false end
+      local down = (e:getType() == hs.eventtap.event.types.keyDown)
+      local key = hs.keycodes.map[e:getKeyCode()]
+      if key == "r" then
+        if down then
+          if not rHeld then rHeld = true startAdvancing() end
+        else
+          rHeld = false
+          stopAdvancing()
+        end
+        return true
+      elseif key == "escape" and down then
+        closeReader()
+        return true
+      elseif (key == "up" or key == "=") and down then
+        readerWpm = math.min(1200, readerWpm + 25)
+        hs.settings.set("tttReaderWpm", readerWpm)
+        renderReaderWord()
+        return true
+      elseif (key == "down" or key == "-") and down then
+        readerWpm = math.max(100, readerWpm - 25)
+        hs.settings.set("tttReaderWpm", readerWpm)
+        renderReaderWord()
+        return true
+      elseif key == "left" and down then
+        readerIndex = math.max(1, readerIndex - 1)
+        renderReaderWord()
+        return true
+      elseif key == "right" and down then
+        readerIndex = math.min(#readerWords, readerIndex + 1)
+        renderReaderWord()
+        return true
+      end
+      return false
+    end)
+  readerTap:start()
+end
+
+local function openReaderWith(text)
+  readerWords = {}
+  for w in text:gmatch("%S+") do readerWords[#readerWords + 1] = w end
+  if #readerWords == 0 then
+    hs.alert.show("Nothing to read")
+    return
+  end
+  closeReader()
+  readerIndex = 1
+  buildReader()
+  renderReaderWord()
+  stopAdvancing()  -- shows the hint line
+  startReaderTap()
+end
+
+-- Exposed so scripts (and `hs -c`) can drive or dismiss the reader.
+tttReadText = openReaderWith
+tttCloseReader = closeReader
+
+local function openReaderFromSelection()
+  if reader then closeReader() return end
+  local previous = hs.pasteboard.getContents()
+  local changeCount = hs.pasteboard.changeCount()
+  hs.eventtap.keyStroke({ "cmd" }, "c")
+  hs.timer.doAfter(0.25, function()
+    local selection = nil
+    if hs.pasteboard.changeCount() ~= changeCount then
+      selection = hs.pasteboard.getContents()
+      if previous then hs.pasteboard.setContents(previous) end
+    end
+    if selection and #selection > 0 then
+      openReaderWith(selection)
+    else
+      hs.alert.show("No text selected")
+    end
+  end)
+end
+
+-- ---------------------------------------------------------------------------
 -- Menu bar item: always present next to the clock, so the controls and
 -- options are reachable whether or not anything is currently speaking.
 -- ---------------------------------------------------------------------------
@@ -525,6 +739,16 @@ local function buildMenu()
   table.insert(items, { title = "Speak selection", fn = speakSelection })
   table.insert(items, { title = "Speak clipboard", fn = function() ktts("clip") end })
   table.insert(items, { title = "-" })
+  table.insert(items, { title = "Read selection silently (RSVP)…",
+                        fn = openReaderFromSelection })
+  if reader then
+    table.insert(items, { title = "Close reader", fn = closeReader })
+  end
+  table.insert(items, { title = "Read clipboard silently (RSVP)…",
+                        fn = function()
+                          openReaderWith(hs.pasteboard.getContents() or "")
+                        end })
+  table.insert(items, { title = "-" })
   table.insert(items, { title = "Auto-read replies", checked = autoRead,
                         fn = toggleAutoRead })
   table.insert(items, { title = "Read-along words", checked = rsvpOn,
@@ -569,7 +793,8 @@ local function buildMenu()
   table.insert(items, { title = "-" })
   table.insert(items, { title = "Hotkeys…", fn = function()
     hs.alert.show("⌃⌥S speak selection\n⌃⌥P play / pause\n"
-      .. "⌃⌥← rewind 10s\n⌃⌥X stop\n⌃⌥A auto-read", 4)
+      .. "⌃⌥← rewind 10s\n⌃⌥X stop\n⌃⌥A auto-read\n"
+      .. "⌃⌥R silent RSVP reader (hold R to read)", 5)
   end })
   table.insert(items, { title = "Reset pill position", fn = function()
     hs.settings.clear("tttPillPos")
@@ -599,6 +824,7 @@ hs.hotkey.bind({ "ctrl", "alt" }, "x", function()
 end)
 hs.hotkey.bind({ "ctrl", "alt" }, "a", toggleAutoRead)
 hs.hotkey.bind({ "ctrl", "alt" }, "left", function() ktts("back") end)
+hs.hotkey.bind({ "ctrl", "alt" }, "r", openReaderFromSelection)
 
 -- Auto-pause while dictating (hold-Fn, e.g. Wispr Flow): pause speech when
 -- the Fn key goes down, resume where it left off when it is released.

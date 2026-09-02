@@ -24,6 +24,8 @@ account, no network calls after install.
   word as it is spoken, RSVP style with the ORP anchor letter highlighted
   and pinned so your eye never travels; see
   [docs/RSVP-SPEC.md](docs/RSVP-SPEC.md)
+- **Silent RSVP reader** (`⌃⌥R`) — select text and read it word-by-word with
+  no audio at all: hold `R` to advance, release to hold, `↑`/`↓` for speed
 - **Dictation-aware** — hold-Fn dictation tools (e.g. Wispr Flow) auto-pause
   speech while you talk and resume when you release
 - **54 voices** across 9 languages, all local — pick one from the menu bar
@@ -61,6 +63,7 @@ Claude Code / Codex if you want agent responses staged.
 | `⌃⌥←` | — | rewind 10 s |
 | `⌃⌥X` | dismiss staged reply | stop |
 | `⌃⌥A` | toggle auto-read | toggle auto-read |
+| `⌃⌥R` | silent RSVP reader on the selection (hold `R` to read, `↑↓` speed, `←→` step, `esc` close) ||
 
 ## CLI
 
