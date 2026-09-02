@@ -420,6 +420,41 @@ local function layoutPill(st)
   pill:frame({ x = f.x + (f.w - w), y = f.y, w = w, h = h })
 end
 
+-- Recover a pill that cannot be found: un-hide it, re-assert its window
+-- level, and put it back at the default corner of the screen the mouse is
+-- on, since "lost" usually means dragged somewhere off-screen or onto a
+-- display that has since been unplugged.
+local function bringPillToFront()
+  pillHidden = false
+  if not pill then buildPill() end
+  local scr = (hs.mouse.getCurrentScreen() or hs.screen.mainScreen()):frame()
+  local f = pill:frame()
+  local x, y = scr.x + scr.w - f.w - 14, scr.y + 10
+  pill:topLeft({ x = x, y = y })
+  hs.settings.set("tttPillPos", { x = x, y = y })
+  pill:level(hs.canvas.windowLevels.overlay)
+  pill:behavior({ "canJoinAllSpaces", "stationary" })
+
+  if currentState == "idle" then
+    -- nothing is playing, so updatePill would just hide it again: show a
+    -- resting state long enough to be spotted, then let it go
+    layoutPill("idle")
+    pill[3].text = "Idle"
+    for i = 0, WAVE_BARS - 1 do pill[7 + i].action = "skip" end
+    pill:show(0.15)
+    hs.timer.doAfter(3, function()
+      if pill and currentState == "idle" then pill:hide(0.4) end
+    end)
+  else
+    if updatePillRef then updatePillRef() end
+    pill:show(0.15)
+  end
+  hs.alert.show("Pill moved to the top right", 1.2)
+end
+
+-- Exposed so it can be reached even if the menu bar item is the thing lost.
+tttBringPillToFront = bringPillToFront
+
 local function readWord()
   local f = io.open(WORD_FILE, "r")
   if not f then return "" end
@@ -944,6 +979,7 @@ local function buildMenu()
         fn = toggleAutoRead })
   add({ title = "TLDR — summarise before reading",
         checked = tcfg.tldr_replies == true, fn = toggleTldr })
+  add({ title = "Bring pill to front", fn = bringPillToFront })
 
   -- 3. acting on what is happening right now --------------------------------
   sep()

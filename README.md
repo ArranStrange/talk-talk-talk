@@ -14,7 +14,9 @@ account, no network calls after install.
   and speed pickers, and the auto-read / read-along toggles
 - **A floating pill** with live state (loading / preparing / speaking /
   paused / replied), an animated waveform while speaking, and clickable
-  AUTO / rewind / pause / stop buttons. Drag it anywhere; it remembers.
+  AUTO / rewind / pause / stop buttons. Drag it anywhere; it remembers — and
+  "Bring pill to front" in the menu recovers it if it ends up off-screen or
+  on a display you have since unplugged.
 - **Agent responses read aloud** — when Claude Code, Codex, or Cursor
   finishes a response, the pill pops up with a play button, or speaks
   immediately in auto mode (`⌃⌥A`)
