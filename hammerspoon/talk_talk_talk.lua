@@ -69,6 +69,14 @@ local lastSeenState = "idle"
 local rsvpOn = hs.settings.get("tttRsvp") or false
 local WORD_FILE = KOKORO_DIR .. "/word"
 local PILL_H, DRAWER_H = 36, 92
+-- ORP (optimal recognition point): the letter the eye fixates on. Held at
+-- a fixed x so the anchor never moves between words — that is what makes
+-- RSVP readable at speed.
+local ORP_X_FRACTION = 0.42
+local RSVP_FONT = "Helvetica-Bold"
+local RSVP_SIZE = 26
+local ORP_COLOR = { red = 1, green = 0.36, blue = 0.30, alpha = 1 }
+local drawerLeft, drawerRight, drawerY = 14, 262, 46
 
 local function playPending()
   hs.task.new("/bin/sh", nil,
@@ -164,11 +172,17 @@ local function buildPill()
                text = "▾", textSize = 15, textAlignment = "center",
                textColor = rsvpOn and AUTO_ON or AUTO_OFF,
                trackMouseDown = true, id = "rsvp" }
-  -- RSVP drawer: the currently-spoken word, shown while the pill is tall
+  -- RSVP drawer: the currently-spoken word, positioned by updateWord so
+  -- its ORP letter stays pinned; hence left alignment, not centred.
   pill[15] = { type = "text", action = "skip",
                frame = { x = 10, y = 46, w = 252, h = 38 },
-               text = "", textSize = 26, textAlignment = "center",
-               textColor = { red = 1, green = 1, blue = 1, alpha = 0.95 } }
+               text = "", textAlignment = "left" }
+  -- faint guide ticks marking the fixation point
+  for i = 16, 17 do
+    pill[i] = { type = "rectangle", action = "skip",
+                frame = { x = 0, y = 0, w = 1.5, h = 6 },
+                fillColor = { red = 1, green = 1, blue = 1, alpha = 0.25 } }
+  end
   pill:mouseCallback(function(_, event, id)
     if event ~= "mouseDown" then return end
     if id == "auto" then
@@ -237,8 +251,11 @@ local function layoutPill(st)
   -- the drawer drops downward, so the control row never moves
   local drawerOpen = rsvpOn and (st == "playing" or st == "paused")
   local h = drawerOpen and DRAWER_H or PILL_H
-  pill[15].frame = { x = 10, y = 46, w = w - 20, h = 38 }
+  drawerLeft, drawerRight, drawerY = 14, w - 14, 46
   pill[15].action = drawerOpen and "fill" or "skip"
+  pill[16].action = drawerOpen and "fill" or "skip"
+  pill[17].action = drawerOpen and "fill" or "skip"
+  lastWord = nil  -- geometry may have changed: force a re-lay-out
   -- poll the word file while the drawer is open: pathwatcher coalesces
   -- events with ~300ms latency, which is a visible lag at speech pace
   if drawerOpen and not wordTimer then
@@ -260,20 +277,64 @@ local function readWord()
   return (w:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
--- Render the current word in the drawer: shrink long words to fit, and
--- dim while paused so it reads as held rather than live.
+-- Which letter the eye should land on (Spritz-style pivot), 1-indexed.
+local function orpIndex(len)
+  if len <= 1 then return 1
+  elseif len <= 5 then return 2
+  elseif len <= 9 then return 3
+  elseif len <= 13 then return 4
+  else return 5 end
+end
+
+local function measure(str, size)
+  if str == "" then return 0 end
+  local s = hs.styledtext.new(str, { font = { name = RSVP_FONT, size = size } })
+  return hs.drawing.getTextDrawingSize(s).w
+end
+
+-- Render the current word with its ORP letter pinned to a fixed x, so the
+-- eye never has to travel. Long words shrink to fit around that anchor.
 local function updateWord()
   if not pill or not rsvpOn then return end
   if currentState ~= "playing" and currentState ~= "paused" then return end
   local word = readWord()
   if word == lastWord then return end
   lastWord = word
-  pill[15].text = word
-  local size = 26
-  if #word > 12 then size = math.max(14, math.floor(26 * 12 / #word)) end
-  pill[15].textSize = size
-  pill[15].textColor = { red = 1, green = 1, blue = 1,
-                         alpha = (currentState == "paused") and 0.5 or 0.95 }
+  if word == "" then
+    pill[15].text = ""
+    return
+  end
+
+  local anchorX = drawerLeft + (drawerRight - drawerLeft) * ORP_X_FRACTION
+  local orp = orpIndex(#word)
+  local pre, anchor = word:sub(1, orp - 1), word:sub(orp, orp)
+
+  -- shrink only as much as needed for the word to fit around the anchor
+  local size = RSVP_SIZE
+  local leftNeed = measure(pre, size) + measure(anchor, size) / 2
+  local rightNeed = measure(word, size) - leftNeed
+  local leftRoom = anchorX - drawerLeft
+  local rightRoom = drawerRight - anchorX
+  local scale = math.min(1,
+    leftNeed > 0 and leftRoom / leftNeed or 1,
+    rightNeed > 0 and rightRoom / rightNeed or 1)
+  if scale < 1 then size = math.max(12, math.floor(size * scale)) end
+
+  local dim = (currentState == "paused")
+  local color = { red = 1, green = 1, blue = 1, alpha = dim and 0.5 or 0.95 }
+  local anchorColor = { red = ORP_COLOR.red, green = ORP_COLOR.green,
+                        blue = ORP_COLOR.blue, alpha = dim and 0.5 or 1 }
+  local styled = hs.styledtext.new(word,
+    { font = { name = RSVP_FONT, size = size }, color = color })
+  styled = styled:setStyle({ color = anchorColor }, orp, orp)
+
+  -- position so the anchor letter's centre sits exactly on anchorX
+  local offset = measure(pre, size) + measure(anchor, size) / 2
+  pill[15].text = styled
+  pill[15].frame = { x = anchorX - offset, y = drawerY,
+                     w = drawerRight - drawerLeft + 60, h = 38 }
+  pill[16].frame = { x = anchorX - 0.75, y = drawerY - 7, w = 1.5, h = 6 }
+  pill[17].frame = { x = anchorX - 0.75, y = drawerY + 36, w = 1.5, h = 6 }
 end
 
 local function readState()

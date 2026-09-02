@@ -79,13 +79,25 @@ Kokoro's ONNX build returns audio with no word timestamps, so timings are
 - **speed / voice env changes**: timings derive from actual sample spans,
   so they remain correct at any speed.
 
+## ORP anchor (implemented)
+
+Each word is drawn with one letter highlighted in red and **pinned to a
+fixed x position**, so the eye fixates on one point instead of tracking
+across the drawer. Pivot letter by word length (Spritz convention):
+1 char → 1st, 2–5 → 2nd, 6–9 → 3rd, 10–13 → 4th, 14+ → 5th.
+
+The word is rendered as an `hs.styledtext` with a per-character colour
+range, and positioned by measuring the prefix so the anchor's centre lands
+exactly on the fixation point; faint tick marks above and below reinforce
+it. Long words shrink only as far as needed to fit around that fixed
+anchor (floor 12 pt).
+
 ## Non-goals (v1)
 
 - Karaoke-perfect alignment (would require the PyTorch pipeline's token
   timestamps and a ~2 GB torch dependency).
 - Phrase/caption context mode with highlighted word (possible follow-up;
   same timing machinery).
-- ORP (red anchor letter) styling — trivial to add later if wanted.
 
 ## Implementation plan
 
