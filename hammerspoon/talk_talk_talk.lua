@@ -911,131 +911,151 @@ end
 
 local function buildMenu()
   local cfg = readConfig()
+  local tcfg = readCfg()
   local st = currentState
   local speaking = (st == "playing" or st == "paused")
   local items = {}
+  local function add(t) table.insert(items, t) end
+  local function sep() add({ title = "-" }) end
 
-  local statusText = ({ idle = "Idle", loading = "Loading model…",
-                        synthesizing = "Preparing…", playing = "Speaking",
-                        paused = "Paused", ready = "Reply ready",
-                        summarising = "Summarising…" })[st] or st
-  table.insert(items, { title = statusText, disabled = true })
-  table.insert(items, { title = "-" })
+  -- 1. state ----------------------------------------------------------------
+  add({ title = ({ idle = "Idle", loading = "Loading model…",
+                   synthesizing = "Preparing…", playing = "Speaking",
+                   paused = "Paused", ready = "Reply ready",
+                   summarising = "Summarising…" })[st] or st,
+        disabled = true })
 
-  if st == "ready" then
-    table.insert(items, { title = "Play reply", fn = playPending })
-    table.insert(items, { title = "Dismiss reply", fn = dismissReady })
+  -- 2. the one switch worth reaching for first ------------------------------
+  sep()
+  add({ title = "TLDR — summarise before reading",
+        checked = tcfg.tldr_replies == true, fn = toggleTldr })
+
+  -- 3. acting on what is happening right now --------------------------------
+  sep()
+  if st == "summarising" then
+    add({ title = "Cancel summarising", fn = cancelSummarise })
+  elseif st == "ready" then
+    add({ title = "Play reply", fn = function() playPending("speak") end })
+    add({ title = "Dismiss reply", fn = dismissReady })
   else
-    table.insert(items, {
-      title = (st == "paused") and "Resume" or "Pause",
-      disabled = not speaking,
-      fn = function() ktts("toggle") end,
-    })
-    table.insert(items, { title = "Rewind 10s", disabled = not speaking,
-                          fn = function() ktts("back") end })
-    table.insert(items, { title = "Stop", disabled = not speaking,
-                          fn = function() ktts("stop") end })
+    add({ title = (st == "paused") and "Resume" or "Pause",
+          disabled = not speaking, fn = function() ktts("toggle") end })
+    add({ title = "Rewind 10s", disabled = not speaking,
+          fn = function() ktts("back") end })
+    add({ title = "Stop", disabled = not speaking,
+          fn = function() ktts("stop") end })
   end
-  table.insert(items, { title = "-" })
-  table.insert(items, { title = "Speak selection",
-                        fn = function() readSelection("speak") end })
-  table.insert(items, { title = "Selection → reader",
-                        fn = function() readSelection("reader") end })
-  table.insert(items, { title = "Read clipboard", fn = function()
-    local clip = hs.pasteboard.getContents()
-    if not clip or #clip == 0 then hs.alert.show("Clipboard is empty") return end
-    local f = io.open(SELECTION_FILE, "w")
-    if f then f:write(clip) f:close() deliverFile(SELECTION_FILE) end
-  end })
-  table.insert(items, { title = "-" })
-  table.insert(items, { title = "Read selection silently (RSVP)…",
-                        fn = openReaderFromSelection })
-  if reader then
-    table.insert(items, { title = "Close reader", fn = closeReader })
-  end
-  table.insert(items, { title = "Read clipboard silently (RSVP)…",
-                        fn = function()
-                          openReaderWith(hs.pasteboard.getContents() or "")
-                        end })
 
+  -- 4. starting something new -----------------------------------------------
+  sep()
+  add({ title = "Speak selection", fn = function() readSelection("speak") end })
+  add({ title = "Selection → reader", fn = function() readSelection("reader") end })
+  local function clipboardTo(dest)
+    return function()
+      local clip = hs.pasteboard.getContents()
+      if not clip or #clip == 0 then hs.alert.show("Clipboard is empty") return end
+      local f = io.open(SELECTION_FILE, "w")
+      if f then f:write(clip) f:close() deliverFile(SELECTION_FILE, dest) end
+    end
+  end
+  add({ title = "Speak clipboard", fn = clipboardTo("speak") })
+  add({ title = "Clipboard → reader", fn = clipboardTo("reader") })
+  add({ title = "Speak the last reply", disabled = st ~= "ready",
+        fn = function() playPending("speak") end })
+  add({ title = "Last reply → reader", disabled = st ~= "ready",
+        fn = function() playPending("reader") end })
+  add({ title = "Auto-read replies", checked = autoRead, fn = toggleAutoRead })
+
+  -- 5. RSVP ------------------------------------------------------------------
+  sep()
+  add({ title = "Read-along words while speaking", checked = rsvpOn,
+        fn = toggleRsvp })
   local wpmMenu = {}
   for _, wpm in ipairs({ 200, 250, 300, 350, 400, 500, 600, 800 }) do
-    table.insert(wpmMenu, {
-      title = wpm .. " wpm",
-      checked = (readerWpm == wpm),
+    table.insert(wpmMenu, { title = wpm .. " wpm", checked = (readerWpm == wpm),
       fn = function()
         readerWpm = wpm
         hs.settings.set("tttReaderWpm", wpm)
-      end,
-    })
+      end })
   end
-  table.insert(items, {
-    title = "Reader speed (" .. readerWpm .. " wpm)",
-    menu = wpmMenu,
-  })
+  add({ title = "Reader speed (" .. readerWpm .. " wpm)", menu = wpmMenu })
   if reader then
-    table.insert(items, {
-      title = string.format("Reader position: %d / %d", readerIndex, #readerWords),
-      disabled = true,
-    })
-  end
-  table.insert(items, { title = "-" })
-  local cfg2 = readCfg()
-  table.insert(items, { title = "Auto-read replies", checked = autoRead,
-                        fn = toggleAutoRead })
-  table.insert(items, {
-    title = "TLDR — summarise before reading",
-    checked = cfg2.tldr_replies == true,
-    fn = toggleTldr,
-  })
-  table.insert(items, {
-    title = "Speak the last reply",
-    disabled = currentState ~= "ready",
-    fn = function() playPending("speak") end,
-  })
-  table.insert(items, {
-    title = "Last reply → reader",
-    disabled = currentState ~= "ready",
-    fn = function() playPending("reader") end,
-  })
-  if currentState == "summarising" then
-    table.insert(items, { title = "Cancel summarising", fn = cancelSummarise })
+    add({ title = string.format("Reader position: %d / %d",
+                                readerIndex, #readerWords), disabled = true })
+    add({ title = "Close reader", fn = closeReader })
   end
 
+  -- 6. TLDR settings ---------------------------
+  sep()
+  local tldrMenu = {}
   local PROVIDERS = {
     { "claude-cli", "Claude Code CLI (no key, uses your plan)" },
     { "anthropic",  "Claude API (needs key)" },
     { "openai",     "ChatGPT API (needs key)" },
     { "extractive", "Local, no AI (free, instant)" },
   }
+  local current = tcfg.tldr_provider or "claude-cli"
+  local provMenu = {}
+  for _, pr in ipairs(PROVIDERS) do
+    table.insert(provMenu, { title = pr[2], checked = (current == pr[1]),
+      fn = function()
+        local c = readCfg()
+        c.tldr_provider, c.tldr_model = pr[1], nil
+        writeCfg(c)
+        hs.alert.show("TLDR via " .. pr[2])
+      end })
+  end
+  table.insert(tldrMenu, { title = "Provider", menu = provMenu })
+
   local MODELS = {
     ["claude-cli"] = { "haiku", "sonnet", "opus" },
     ["anthropic"]  = { "claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-opus-5" },
     ["openai"]     = { "gpt-4o-mini", "gpt-4o" },
     ["extractive"] = {},
   }
-  local current = cfg2.tldr_provider or "claude-cli"
-
-  local provMenu = {}
-  for _, pr in ipairs(PROVIDERS) do
-    table.insert(provMenu, {
-      title = pr[2],
-      checked = (current == pr[1]),
-      fn = function()
-        local c = readCfg()
-        c.tldr_provider = pr[1]
-        c.tldr_model = nil  -- fall back to that provider's default
-        writeCfg(c)
-        hs.alert.show("TLDR via " .. pr[2])
-      end,
-    })
+  local mdl = MODELS[current] or {}
+  if #mdl > 0 then
+    local modelMenu = {}
+    local chosen = tcfg.tldr_model or mdl[1]
+    for _, m in ipairs(mdl) do
+      table.insert(modelMenu, { title = m, checked = (chosen == m),
+        fn = function()
+          local c = readCfg(); c.tldr_model = m; writeCfg(c)
+        end })
+    end
+    table.insert(modelMenu, { title = "-" })
+    table.insert(modelMenu, { title = "Custom model…", fn = function()
+      local btn, val = hs.dialog.textPrompt("TLDR model",
+        "Model identifier to send to the " .. current .. " API:",
+        tcfg.tldr_model or "", "Use", "Cancel")
+      if btn == "Use" and val and #val > 0 then
+        local c = readCfg(); c.tldr_model = val; writeCfg(c)
+      end
+    end })
+    table.insert(tldrMenu, { title = "Model", menu = modelMenu })
   end
-  table.insert(provMenu, { title = "-" })
-  table.insert(provMenu, { title = "Store Claude API key…", fn = function()
+
+  local lenMenu = {}
+  for _, n in ipairs({ 1, 2, 3, 5 }) do
+    table.insert(lenMenu, {
+      title = n .. (n == 1 and " sentence" or " sentences"),
+      checked = ((tcfg.tldr_sentences or 3) == n),
+      fn = function()
+        local c = readCfg(); c.tldr_sentences = n; writeCfg(c)
+      end })
+  end
+  table.insert(tldrMenu, { title = "Summary length", menu = lenMenu })
+
+  table.insert(tldrMenu, { title = "-" })
+  table.insert(tldrMenu, { title = "Store Claude API key…", fn = function()
     hs.pasteboard.setContents("ttt-set-key anthropic")
     hs.alert.show("Command copied — paste it in Terminal.\nYour key is typed straight into the Keychain.", 5)
   end })
-  table.insert(provMenu, { title = "Set Claude workspace id…", fn = function()
+  table.insert(tldrMenu, { title = "Store ChatGPT API key…", fn = function()
+    hs.pasteboard.setContents("ttt-set-key openai")
+    hs.alert.show("Command copied — paste it in Terminal.\nYour key is typed straight into the Keychain.", 5)
+  end })
+  table.insert(tldrMenu, { title = "Set Claude workspace id…", fn = function()
     local c = readCfg()
     local btn, val = hs.dialog.textPrompt("Claude workspace id",
       "Identity-linked API keys must name a workspace.\n"
@@ -1048,57 +1068,11 @@ local function buildMenu()
       hs.alert.show(#val > 0 and ("Workspace: " .. val) or "Workspace id cleared")
     end
   end })
-  table.insert(provMenu, { title = "Store ChatGPT API key…", fn = function()
-    hs.pasteboard.setContents("ttt-set-key openai")
-    hs.alert.show("Command copied — paste it in Terminal.\nYour key is typed straight into the Keychain.", 5)
-  end })
-  table.insert(items, { title = "TLDR provider", menu = provMenu })
 
-  local mdl = MODELS[current] or {}
-  if #mdl > 0 then
-    local modelMenu = {}
-    local chosen = cfg2.tldr_model or mdl[1]
-    for _, m in ipairs(mdl) do
-      table.insert(modelMenu, {
-        title = m,
-        checked = (chosen == m),
-        fn = function()
-          local c = readCfg()
-          c.tldr_model = m
-          writeCfg(c)
-        end,
-      })
-    end
-    table.insert(modelMenu, { title = "-" })
-    table.insert(modelMenu, { title = "Custom model…", fn = function()
-      local ok, val = hs.dialog.textPrompt("TLDR model",
-        "Model identifier to send to the " .. current .. " API:",
-        cfg2.tldr_model or "", "Use", "Cancel")
-      if ok == "Use" and val and #val > 0 then
-        local c = readCfg()
-        c.tldr_model = val
-        writeCfg(c)
-      end
-    end })
-    table.insert(items, { title = "TLDR model", menu = modelMenu })
-  end
+  add({ title = "TLDR options", menu = tldrMenu })
 
-  local lenMenu = {}
-  for _, n in ipairs({ 1, 2, 3, 5 }) do
-    table.insert(lenMenu, {
-      title = n .. (n == 1 and " sentence" or " sentences"),
-      checked = ((cfg2.tldr_sentences or 3) == n),
-      fn = function()
-        local c = readCfg()
-        c.tldr_sentences = n
-        writeCfg(c)
-      end,
-    })
-  end
-  table.insert(items, { title = "TLDR length", menu = lenMenu })
-  table.insert(items, { title = "Read-along words", checked = rsvpOn,
-                        fn = toggleRsvp })
-
+  -- 7. voice -----------------------------------------------------------------
+  sep()
   local voiceMenu = {}
   for _, group in ipairs(VOICES) do
     local groupName, ids, lang = group[1], group[2], group[3]
@@ -1113,12 +1087,11 @@ local function buildMenu()
           c.voice, c.lang = id, lang
           writeConfig(c)
           hs.alert.show("Voice: " .. id)
-        end,
-      })
+        end })
     end
     table.insert(voiceMenu, { title = groupName, menu = sub })
   end
-  table.insert(items, { title = "Voice", menu = voiceMenu })
+  add({ title = "Voice (" .. (cfg.voice or "af_heart") .. ")", menu = voiceMenu })
 
   local speedMenu = {}
   for _, sp in ipairs(SPEEDS) do
@@ -1126,28 +1099,28 @@ local function buildMenu()
       title = string.format("%.2gx", sp),
       checked = (math.abs((cfg.speed or 1.1) - sp) < 0.001),
       fn = function()
-        local c = readConfig()
-        c.speed = sp
-        writeConfig(c)
+        local c = readConfig(); c.speed = sp; writeConfig(c)
         hs.alert.show(string.format("Speed: %.2gx", sp))
-      end,
-    })
+      end })
   end
-  table.insert(items, { title = "Speed", menu = speedMenu })
+  add({ title = string.format("Speaking speed (%.2gx)", cfg.speed or 1.1),
+        menu = speedMenu })
 
-  table.insert(items, { title = "-" })
-  table.insert(items, { title = "Hotkeys…", fn = function()
-    hs.alert.show("⌃⌥S read selection\n⌃⌥P read reply / pause\n"
-      .. "⌃⌥← rewind 10s\n⌃⌥X stop\n⌃⌥A auto-read\n"
+  -- 8. housekeeping ----------------------------------------------------------
+  sep()
+  add({ title = "Hotkeys…", fn = function()
+    hs.alert.show("⌃⌥S speak selection\n⌃⌥R selection in the reader\n"
+      .. "⌃⌥P speak the reply / pause\n⌃⌥← rewind 10s\n"
+      .. "⌃⌥X cancel / dismiss / stop\n⌃⌥A auto-read on/off\n"
       .. "⌃⌥T TLDR on/off (applies to both)\n"
       .. "   in the reader: hold R to read · ↑↓ speed\n"
       .. "   ←→ step a word · esc close", 6)
   end })
-  table.insert(items, { title = "Reset pill position", fn = function()
+  add({ title = "Reset pill position", fn = function()
     hs.settings.clear("tttPillPos")
     hs.alert.show("Pill returns to the top right")
   end })
-  table.insert(items, { title = "Restart speech engine", fn = function()
+  add({ title = "Restart speech engine", fn = function()
     ktts("quit")
     hs.alert.show("Engine will reload on next use")
   end })
