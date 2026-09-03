@@ -122,6 +122,37 @@ sleep 1
 open -a Hammerspoon
 LAUNCH
 chmod +x "$APPDIR/Contents/MacOS/talk-talk-talk"
+
+# Icon: macos/icon.png rendered into the ten sizes macOS asks for. Skipped
+# quietly if the tools are missing — a bundle with no icon still launches.
+if command -v iconutil >/dev/null 2>&1 && [ -f "$REPO/macos/icon.png" ]; then
+  say "Building the app icon"
+  ISET="$(mktemp -d)/icon.iconset"
+  mkdir -p "$ISET" "$APPDIR/Contents/Resources"
+  while read -r px name; do
+    [ -n "$px" ] || continue
+    sips -z "$px" "$px" "$REPO/macos/icon.png" \
+      --out "$ISET/icon_$name.png" >/dev/null 2>&1
+  done <<'SIZES'
+16 16x16
+32 16x16@2x
+32 32x32
+64 32x32@2x
+128 128x128
+256 128x128@2x
+256 256x256
+512 256x256@2x
+512 512x512
+1024 512x512@2x
+SIZES
+  if iconutil -c icns "$ISET" \
+       -o "$APPDIR/Contents/Resources/TalkTalkTalk.icns" 2>/dev/null; then
+    grep -q CFBundleIconFile "$APPDIR/Contents/Info.plist" || \
+      /usr/bin/plutil -insert CFBundleIconFile -string TalkTalkTalk \
+        "$APPDIR/Contents/Info.plist" 2>/dev/null || true
+  fi
+  rm -rf "$(dirname "$ISET")"
+fi
 touch "$APPDIR"
 
 # --- 8. Smoke tests --------------------------------------------------------------

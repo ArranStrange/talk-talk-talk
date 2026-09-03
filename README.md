@@ -1,4 +1,6 @@
-# Talk Talk Talk 🗣
+# Talk Talk Talk
+
+<img src="macos/icon.png" width="96" alt="Talk Talk Talk icon">
 
 Local, free text-to-speech for your Mac — with a floating status pill,
 global hotkeys, and automatic read-aloud of **Claude Code**, **Codex CLI**,
@@ -53,7 +55,9 @@ there is untouched.
 
 The installer creates **~/Applications/Talk Talk Talk.app** — drag it to the
 Dock and clicking it brings everything back in about two seconds, by asking
-Hammerspoon to reload rather than restarting it.
+Hammerspoon to reload rather than restarting it. The installer renders
+`macos/icon.png` into an `.icns` so the launcher looks like the pill it
+brings back.
 
 ## Requirements
 
