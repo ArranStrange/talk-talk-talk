@@ -10,3 +10,7 @@ kokoro/daemon.log
 kokoro/notify_forward.json
 kokoro/__pycache__/
 .DS_Store
+
+# Swift build output
+macos/TalkTalkTalk/.build/
+macos/TalkTalkTalk/build/

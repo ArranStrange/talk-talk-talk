@@ -5,6 +5,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"
 KOKORO="$REPO/kokoro"
 MODEL_BASE="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+APPDIR="$HOME/Applications/Talk Talk Talk.app"
+BUNDLE_ID="com.talktalktalk.app"
 
 say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -16,12 +18,16 @@ command -v brew >/dev/null || die "Homebrew is required: https://brew.sh"
 say "Checking espeak-ng (phonemizer)"
 brew list espeak-ng >/dev/null 2>&1 || brew install espeak-ng
 
-say "Checking Hammerspoon (hotkeys + pill UI)"
-if [ ! -d "/Applications/Hammerspoon.app" ]; then
-  brew install --cask hammerspoon
+# --- 2. Swift toolchain -------------------------------------------------------
+# The UI is a native app, so a compiler is needed. Command Line Tools is
+# enough; a full Xcode install is not.
+if ! command -v swift >/dev/null 2>&1; then
+  die "Swift is required to build the app. Install the Command Line Tools:
+       xcode-select --install"
 fi
+say "Using $(swift --version 2>&1 | head -1)"
 
-# --- 2. Python 3.10+ ----------------------------------------------------------
+# --- 3. Python 3.10+ ----------------------------------------------------------
 PY=""
 for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
   if command -v "$candidate" >/dev/null; then
@@ -38,7 +44,7 @@ if [ -z "$PY" ]; then
 fi
 say "Using $PY"
 
-# --- 3. Virtualenv -------------------------------------------------------------
+# --- 4. Virtualenv -------------------------------------------------------------
 if [ ! -x "$KOKORO/venv/bin/python" ]; then
   say "Creating venv and installing kokoro-onnx + sounddevice"
   "$PY" -m venv "$KOKORO/venv"
@@ -48,7 +54,7 @@ else
   say "venv already present"
 fi
 
-# --- 4. Model weights (Apache 2.0, ~340 MB total) ------------------------------
+# --- 5. Model weights (Apache 2.0, ~340 MB total) ------------------------------
 for f in kokoro-v1.0.onnx voices-v1.0.bin; do
   if [ ! -f "$KOKORO/$f" ]; then
     say "Downloading $f"
@@ -58,7 +64,7 @@ for f in kokoro-v1.0.onnx voices-v1.0.bin; do
   fi
 done
 
-# --- 5. ktts on PATH ------------------------------------------------------------
+# --- 6. ktts on PATH ------------------------------------------------------------
 chmod +x "$KOKORO/ktts" "$KOKORO/daemon.py" "$KOKORO/speak_response.py" \
          "$KOKORO/codex_notify.py" "$KOKORO/cursor_notify.py" \
          "$KOKORO/tldr.py" "$KOKORO/ttt-set-key"
@@ -67,93 +73,22 @@ say "Linking $BIN/ktts"
 ln -sf "$KOKORO/ktts" "$BIN/ktts"
 ln -sf "$KOKORO/ttt-set-key" "$BIN/ttt-set-key"
 
-# --- 6. Hammerspoon module -------------------------------------------------------
-say "Installing Hammerspoon module"
-mkdir -p "$HOME/.hammerspoon"
-sed "s|@@KOKORO_DIR@@|$KOKORO|" "$REPO/hammerspoon/talk_talk_talk.lua" \
-  > "$HOME/.hammerspoon/talk_talk_talk.lua"
-INIT="$HOME/.hammerspoon/init.lua"
-if ! grep -q 'require("talk_talk_talk")' "$INIT" 2>/dev/null; then
-  printf '\nrequire("talk_talk_talk")\n' >> "$INIT"
-  say "Added require(\"talk_talk_talk\") to $INIT"
-fi
+# --- 7. The app ----------------------------------------------------------------
+say "Building Talk Talk Talk.app"
+"$REPO/macos/TalkTalkTalk/build-app.sh" >/dev/null \
+  || die "the app failed to build — run macos/TalkTalkTalk/build-app.sh to see why"
+BUILT="$REPO/macos/TalkTalkTalk/build/Talk Talk Talk.app"
+[ -d "$BUILT" ] || die "no app bundle at $BUILT"
 
-# --- 7. Dock launcher ----------------------------------------------------------
-say "Creating the Talk Talk Talk launcher in ~/Applications"
-APPDIR="$HOME/Applications/Talk Talk Talk.app"
-mkdir -p "$APPDIR/Contents/MacOS"
-cat > "$APPDIR/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key><string>Talk Talk Talk</string>
-  <key>CFBundleDisplayName</key><string>Talk Talk Talk</string>
-  <key>CFBundleIdentifier</key><string>com.talktalktalk.launcher</string>
-  <key>CFBundleExecutable</key><string>talk-talk-talk</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>NSHighResolutionCapable</key><true/>
-</dict>
-</plist>
-PLIST
-cat > "$APPDIR/Contents/MacOS/talk-talk-talk" <<'LAUNCH'
-#!/bin/bash
-# Brings the Hammerspoon-hosted UI back after "Quit Talk Talk Talk".
-INIT="$HOME/.hammerspoon/init.lua"
-HS_CLI=""
-for c in /opt/homebrew/bin/hs /usr/local/bin/hs; do
-  [ -x "$c" ] && HS_CLI="$c" && break
-done
-if ! pgrep -x Hammerspoon >/dev/null 2>&1; then
-  open -a Hammerspoon
-  exit 0
-fi
-# Reload re-runs the module's setup without restarting Hammerspoon. Deferred
-# on purpose: hs.reload() tears down the IPC channel, so a direct call never
-# answers and the client hangs waiting for a reply that cannot come.
-if [ -n "$HS_CLI" ]; then
-  "$HS_CLI" -c 'hs.timer.doAfter(0.3, hs.reload)' >/dev/null 2>&1 &
-  sleep 2
-  pgrep -x Hammerspoon >/dev/null 2>&1 && exit 0
-fi
-killall Hammerspoon 2>/dev/null
+# Replacing a running copy leaves the old process holding the hotkeys.
+pkill -f "Talk Talk Talk.app/Contents/MacOS/TalkTalkTalk" 2>/dev/null || true
 sleep 1
-open -a Hammerspoon
-LAUNCH
-chmod +x "$APPDIR/Contents/MacOS/talk-talk-talk"
-
-# Icon: macos/icon.png rendered into the ten sizes macOS asks for. Skipped
-# quietly if the tools are missing — a bundle with no icon still launches.
-if command -v iconutil >/dev/null 2>&1 && [ -f "$REPO/macos/icon.png" ]; then
-  say "Building the app icon"
-  ISET="$(mktemp -d)/icon.iconset"
-  mkdir -p "$ISET" "$APPDIR/Contents/Resources"
-  while read -r px name; do
-    [ -n "$px" ] || continue
-    sips -z "$px" "$px" "$REPO/macos/icon.png" \
-      --out "$ISET/icon_$name.png" >/dev/null 2>&1
-  done <<'SIZES'
-16 16x16
-32 16x16@2x
-32 32x32
-64 32x32@2x
-128 128x128
-256 128x128@2x
-256 256x256
-512 256x256@2x
-512 512x512
-1024 512x512@2x
-SIZES
-  if iconutil -c icns "$ISET" \
-       -o "$APPDIR/Contents/Resources/TalkTalkTalk.icns" 2>/dev/null; then
-    grep -q CFBundleIconFile "$APPDIR/Contents/Info.plist" || \
-      /usr/bin/plutil -insert CFBundleIconFile -string TalkTalkTalk \
-        "$APPDIR/Contents/Info.plist" 2>/dev/null || true
-  fi
-  rm -rf "$(dirname "$ISET")"
-fi
-touch "$APPDIR"
+mkdir -p "$HOME/Applications"
+rm -rf "$APPDIR"
+cp -R "$BUILT" "$APPDIR"
+# The app needs to know where the engine lives; the repo can be anywhere.
+defaults write "$BUNDLE_ID" kokoroDir "$KOKORO"
+say "Installed $APPDIR"
 
 # --- 8. Smoke tests --------------------------------------------------------------
 # Run the hook, do not merely byte-compile it: a missing function is a
@@ -176,48 +111,46 @@ say "Hook OK"
 say "Smoke test (first run loads the model, ~3s)"
 "$BIN/ktts" say "Talk talk talk is installed." || die "smoke test failed — see $KOKORO/daemon.log"
 
-cat <<'EOF'
+open "$APPDIR"
+
+cat <<EOF
 
 ────────────────────────────────────────────────────────────────────────
-Talk Talk Talk is installed. Remaining manual steps:
+Talk Talk Talk is installed and running — look for the ◍ next to the clock.
 
-1. Open Hammerspoon.app and grant it Accessibility permission
-   (System Settings → Privacy & Security → Accessibility), then choose
-   "Launch Hammerspoon at login" in its preferences. If it was already
-   running, reload its config from the menu-bar hammer icon.
+Remaining manual steps:
 
-2. To stage Claude Code responses in the pill, add to ~/.claude/settings.json:
+1. Grant Accessibility permission to **Talk Talk Talk** in
+   System Settings → Privacy & Security → Accessibility.
+   Speaking the selection works by copying it, and posting a ⌘C to
+   another app is what that permission governs. The hotkeys themselves
+   work without it.
+
+2. Menu bar → "Start at login" if you want it there after a restart.
+
+3. Drag $APPDIR to the Dock to have it one click away.
+
+4. To stage Claude Code responses, add to ~/.claude/settings.json:
 
    "hooks": {
      "Stop": [{ "hooks": [{
        "type": "command",
-       "command": "<REPO>/kokoro/speak_response.py",
+       "command": "$KOKORO/speak_response.py",
        "async": true, "timeout": 30
      }]}]
    }
 
-3. To stage Codex CLI responses, add to ~/.codex/config.toml:
+5. To stage Codex CLI responses, add to ~/.codex/config.toml:
 
-   notify = ["<REPO>/kokoro/codex_notify.py"]
+   notify = ["$KOKORO/codex_notify.py"]
 
-   (If notify was already set, copy its old value into
-   <REPO>/kokoro/notify_forward.json as a JSON array to keep it working.)
+6. To stage Cursor responses, add to ~/.cursor/hooks.json:
 
-4. To stage Cursor responses, add to ~/.cursor/hooks.json:
-
-   {
-     "version": 1,
-     "hooks": {
-       "afterAgentResponse": [
-         { "command": "<REPO>/kokoro/cursor_notify.py" }
-       ]
-     }
-   }
-
-Drag ~/Applications/Talk Talk Talk.app to the Dock: it reopens the UI
-after you use "Quit Talk Talk Talk" in the menu.
+   { "version": 1, "hooks": { "afterAgentResponse": [
+       { "command": "$KOKORO/cursor_notify.py" } ] } }
 
 Hotkeys: ⌃⌥S speak selection · ⌃⌥P play/pause · ⌃⌥← rewind ·
-         ⌃⌥X stop · ⌃⌥A auto-read toggle
+         ⌃⌥X stop · ⌃⌥A auto-read · ⌃⌥R reader · ⌃⌥T TL;DR
+Log:     ~/Library/Logs/TalkTalkTalk.log
 ────────────────────────────────────────────────────────────────────────
 EOF

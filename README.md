@@ -2,9 +2,10 @@
 
 <img src="macos/icon.png" width="96" alt="Talk Talk Talk icon">
 
-Local, free text-to-speech for your Mac — with a floating status pill,
-global hotkeys, and automatic read-aloud of **Claude Code**, **Codex CLI**,
-and **Cursor** responses. Everything runs on-device using the open-weights
+Local, free text-to-speech for your Mac — a native menu bar app with a
+floating status pill, global hotkeys, and automatic read-aloud of
+**Claude Code**, **Codex CLI**, and **Cursor** responses. Everything runs
+on-device using the open-weights
 [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) model: no API, no
 account, no network calls after install.
 
@@ -16,9 +17,10 @@ account, no network calls after install.
   and speed pickers, and the auto-read / read-along toggles
 - **A floating pill** with live state (loading / preparing / speaking /
   paused / replied), an animated waveform while speaking, and clickable
-  AUTO / rewind / pause / stop buttons. Drag it anywhere; it remembers — and
-  "Bring pill to front" in the menu recovers it if it ends up off-screen or
-  on a display you have since unplugged.
+  AUTO / rewind / pause / stop buttons. Drag it anywhere; it remembers its
+  top-right corner, so the position holds as the pill resizes with its
+  label — and "Bring To Front" in the menu recovers it if it ends up
+  off-screen or on a display you have since unplugged.
 - **Agent responses read aloud** — when Claude Code, Codex, or Cursor
   finishes a response, the pill pops up with a play button, or speaks
   immediately in auto mode (`⌃⌥A`)
@@ -39,7 +41,8 @@ account, no network calls after install.
   instead of speaking it, dimming the whole screen down to a single
   centred word with its anchor letter pinned. Hold `R` to advance, release to
   hold. Speed and position live in the menu bar so nothing competes with the
-  word.
+  word. The reader takes focus and handles its own keys, so it can never
+  swallow a keystroke system-wide.
 - **Dictation-aware** — hold-Fn dictation tools (e.g. Wispr Flow) auto-pause
   speech while you talk and resume when you release
 - **54 voices** across 9 languages, all local — pick one from the menu bar
@@ -49,21 +52,25 @@ account, no network calls after install.
 ## Closing and reopening it
 
 **Quit Talk Talk Talk** (bottom of the menu) releases the hotkeys, stops
-every timer, watcher and event tap, and shuts the daemon down so it gives
-back its ~600 MB. Hammerspoon keeps running, so anything else you host
-there is untouched.
+every timer and watcher, and shuts the speech daemon down so it gives back
+its ~600 MB. Reopen it from the Dock, `~/Applications`, or Spotlight.
+**Start at login** in the same menu keeps it there across restarts.
 
-The installer creates **~/Applications/Talk Talk Talk.app** — drag it to the
-Dock and clicking it brings everything back in about two seconds, by asking
-Hammerspoon to reload rather than restarting it. The installer renders
-`macos/icon.png` into an `.icns` so the launcher looks like the pill it
-brings back.
+The app is a menu bar app, so it holds no Dock tile of its own while
+running — drag **~/Applications/Talk Talk Talk.app** to the Dock and the
+icon stays there whether it is running or not.
+
+If it ever misbehaves, `~/Library/Logs/TalkTalkTalk.log` records startup
+(how many hotkeys were claimed, whether Accessibility was granted, which
+engine directory it found) and any command the daemon refused.
 
 ## Requirements
 
-macOS on Apple Silicon or Intel, [Homebrew](https://brew.sh), ~1 GB disk
-(model + venv), ~600 MB RAM while the speech daemon is resident
-(`ktts quit` frees it; it restarts on next use).
+macOS 13 or later on Apple Silicon or Intel, [Homebrew](https://brew.sh),
+the Swift toolchain from the Command Line Tools (`xcode-select --install` —
+a full Xcode is not needed), ~1 GB disk (model + venv), ~600 MB RAM while
+the speech daemon is resident (`ktts quit` frees it; it restarts on next
+use).
 
 ## Install
 
@@ -73,13 +80,19 @@ cd talk-talk-talk
 ./install.sh
 ```
 
-The installer: installs `espeak-ng` and Hammerspoon via Homebrew, creates a
-Python venv, downloads the Kokoro model weights (~340 MB, Apache 2.0) from
-the official [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx)
-release, links `ktts` onto your PATH, installs the Hammerspoon module, and
-runs a smoke test. It then prints the two manual steps: granting
-Hammerspoon Accessibility permission, and adding the hook snippets for
-Claude Code / Codex if you want agent responses staged.
+The installer: installs `espeak-ng` via Homebrew, creates a Python venv,
+downloads the Kokoro model weights (~340 MB, Apache 2.0) from the official
+[kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) release, links
+`ktts` onto your PATH, builds and installs the app into `~/Applications`,
+and runs a smoke test that executes the response hook rather than merely
+compiling it. It then prints the manual steps: granting the app
+Accessibility permission, and adding the hook snippets for Claude Code,
+Codex or Cursor if you want agent responses staged.
+
+Accessibility is needed for one thing only — speaking the *selection* works
+by posting ⌘C to the frontmost app and reading the pasteboard, which is
+exactly what that permission governs. The hotkeys themselves are registered
+with the window server and work without it.
 
 ## Hotkeys
 
@@ -163,15 +176,19 @@ Claude Code Stop hook ──┐
 Codex notify hook ──────┤  stage text →  pending.txt + state file
 Cursor afterAgentResponse ┤
                         │
-ktts (CLI / hotkeys) ───┤  unix socket
+ktts (CLI) ─────────────┤  unix socket
                         ▼
-              kokoro daemon (venv)          Hammerspoon
-              · model resident in RAM       · watches the state file
-              · synthesizes per-sentence    · draws the pill + waveform
-              · streams via CoreAudio       · hotkeys, drag, Fn watcher
-              · pause = stop feeding        · buttons → ktts commands
-              · rollback = move cursor
+              kokoro daemon (venv)       Talk Talk Talk.app (Swift)
+              · model resident in RAM    · FSEvents on the state file
+              · synthesizes per-sentence · draws the pill + waveform
+              · streams via CoreAudio    · Carbon hotkeys, Fn watcher
+              · pause = stop feeding     · writes to the socket directly
+              · rollback = move cursor   · NSStatusItem menu, RSVP reader
 ```
+
+The app talks to the daemon over its unix socket rather than shelling out
+to `ktts`, so a button press costs a socket write instead of a Python
+interpreter start.
 
 The daemon keeps the model warm (dispatch is ~40 ms; speech starts in
 ~2–2.5 s with several seconds of audio already banked). Playback is a
@@ -198,10 +215,11 @@ roughly 3× realtime.
 
 ```bash
 ktts quit
-rm "$(brew --prefix)/bin/ktts" ~/.hammerspoon/talk_talk_talk.lua
-# remove the require("talk_talk_talk") line from ~/.hammerspoon/init.lua
-# remove the hook snippets from ~/.claude/settings.json / ~/.codex/config.toml
-# then delete this repo folder
+rm -rf ~/Applications/"Talk Talk Talk.app"
+rm "$(brew --prefix)/bin/ktts" "$(brew --prefix)/bin/ttt-set-key"
+defaults delete com.talktalktalk.app
+# remove the hook snippets from ~/.claude/settings.json, ~/.codex/config.toml
+# and ~/.cursor/hooks.json, then delete this repo folder
 ```
 
 ## Credits & license
@@ -210,5 +228,4 @@ rm "$(brew --prefix)/bin/ktts" ~/.hammerspoon/talk_talk_talk.lua
   Apache 2.0 open-weights TTS model
 - [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) by thewh1teagle —
   ONNX runtime port and model releases
-- [Hammerspoon](https://www.hammerspoon.org) — macOS automation
 - Code in this repo: MIT license (see LICENSE)
