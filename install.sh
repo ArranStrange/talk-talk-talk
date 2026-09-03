@@ -124,7 +124,24 @@ LAUNCH
 chmod +x "$APPDIR/Contents/MacOS/talk-talk-talk"
 touch "$APPDIR"
 
-# --- 8. Smoke test ---------------------------------------------------------------
+# --- 8. Smoke tests --------------------------------------------------------------
+# Run the hook, do not merely byte-compile it: a missing function is a
+# NameError at call time, which compiling never catches, and a hook that
+# crashes stages nothing and looks exactly like "auto-read stopped working".
+say "Checking the response hook actually runs"
+HOOKTMP="$(mktemp -d)"
+cat > "$HOOKTMP/t.jsonl" <<'JSONL'
+{"type":"user","message":{"content":"hi"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"## Heading\n\nA sentence for the smoke test."}]}}
+JSONL
+printf '{"session_id":"smoke","transcript_path":"%s/t.jsonl","hook_event_name":"Stop"}' "$HOOKTMP" \
+  | "$KOKORO/speak_response.py" || die "the response hook failed to run"
+grep -q "smoke test" "$KOKORO/pending.txt" 2>/dev/null \
+  || die "the response hook ran but staged nothing"
+rm -rf "$HOOKTMP"
+printf 'idle' > "$KOKORO/state"
+say "Hook OK"
+
 say "Smoke test (first run loads the model, ~3s)"
 "$BIN/ktts" say "Talk talk talk is installed." || die "smoke test failed — see $KOKORO/daemon.log"
 
