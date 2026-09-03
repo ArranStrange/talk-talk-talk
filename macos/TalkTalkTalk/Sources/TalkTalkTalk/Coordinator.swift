@@ -13,6 +13,7 @@ final class Coordinator {
     private var watcher: StateWatcher?
     private var fnWatcher: FnWatcher?
     private var readyTimer: Timer?
+    private var trustTimer: Timer?
     private var menu: MenuBarController?
 
     private(set) var state = "idle"
@@ -33,6 +34,7 @@ final class Coordinator {
         let fn = FnWatcher { [weak self] in self?.state ?? "idle" }
         fn.start()
         fnWatcher = fn
+        if !Selection.isTrusted { waitForAccessibility() }
 
         bindHotkeys()
         refresh()
@@ -46,6 +48,28 @@ final class Coordinator {
             Hud.shared.show("Talk Talk Talk needs Accessibility permission\n"
                             + "to read the selected text", seconds: 5)
             Selection.requestTrust()
+        }
+    }
+
+    /// Accessibility is usually granted a moment after first launch, and the
+    /// Fn watcher's event tap can only be created once it is. Polling for it
+    /// beats telling someone to quit and reopen the app.
+    private func waitForAccessibility() {
+        var attempts = 0
+        trustTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) {
+            [weak self] timer in
+            attempts += 1
+            guard let self else { timer.invalidate(); return }
+            if Selection.isTrusted {
+                timer.invalidate()
+                self.trustTimer = nil
+                self.fnWatcher?.start()
+                Log.write("accessibility granted; dictation watcher started")
+                Hud.shared.show("Accessibility granted — everything is live")
+            } else if attempts > 100 {      // ~5 minutes, then stop asking
+                timer.invalidate()
+                self.trustTimer = nil
+            }
         }
     }
 
@@ -249,6 +273,7 @@ final class Coordinator {
         Daemon.quit()
         Hotkeys.shared.releaseAll()
         readyTimer?.invalidate()
+        trustTimer?.invalidate()
         watcher?.stop()
         fnWatcher?.stop()
         tldr.cancel()

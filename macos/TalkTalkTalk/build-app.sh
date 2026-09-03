@@ -42,6 +42,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# The waveform mark for the menu bar item and the pill's status indicator.
+if [ -f "$REPO/macos/logo.png" ]; then
+  cp "$REPO/macos/logo.png" "$APP/Contents/Resources/logo.png"
+fi
+
 if command -v iconutil >/dev/null 2>&1 && [ -f "$REPO/macos/icon.png" ]; then
   echo "==> Icon"
   ISET="$(mktemp -d)/icon.iconset"; mkdir -p "$ISET"
@@ -64,11 +69,20 @@ SIZES
   rm -rf "$(dirname "$ISET")"
 fi
 
-# Ad-hoc signature. Enough for macOS to run it and to hold an Accessibility
-# grant; because the signature is tied to the binary's hash, rebuilding the
-# app can require re-approving that permission.
-echo "==> Signing (ad-hoc)"
-codesign --force --deep --sign - "$APP" 2>&1 | sed 's/^/    /' || true
+# Signing. A real identity is strongly preferred: it makes the designated
+# requirement "this bundle id, signed by this certificate", which survives
+# rebuilds. An ad-hoc signature reduces the requirement to a bare cdhash, so
+# every rebuild looks like a different app to macOS and orphans the
+# Accessibility grant.
+IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+            | sed -n 's/.*"\(.*\)"$/\1/p' | head -1)"
+if [ -n "$IDENTITY" ]; then
+  echo "==> Signing as $IDENTITY"
+  codesign --force --deep --sign "$IDENTITY" "$APP" 2>&1 | sed 's/^/    /'
+else
+  echo "==> Signing (ad-hoc — the Accessibility grant will not survive rebuilds)"
+  codesign --force --deep --sign - "$APP" 2>&1 | sed 's/^/    /' || true
+fi
 codesign --verify --deep "$APP" && echo "    signature OK"
 
 echo "==> Built: $APP"

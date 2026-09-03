@@ -12,9 +12,9 @@ account, no network calls after install.
 ## What you get
 
 - **Speak anything, anywhere** — select text in any app and press `⌃⌥S`
-- **A menu bar item** next to the clock, always there: a status glyph that
-  changes colour with state, and a menu with the transport controls, voice
-  and speed pickers, and the auto-read / read-along toggles
+- **A menu bar item** next to the clock, always there: the waveform mark,
+  recoloured by state, and a menu with the transport controls, voice and
+  speed pickers, and the auto-read / read-along toggles
 - **A floating pill** with live state (loading / preparing / speaking /
   paused / replied), an animated waveform while speaking, and clickable
   AUTO / rewind / pause / stop buttons. Drag it anywhere; it remembers its
@@ -59,6 +59,15 @@ its ~600 MB. Reopen it from the Dock, `~/Applications`, or Spotlight.
 The app is a menu bar app, so it holds no Dock tile of its own while
 running — drag **~/Applications/Talk Talk Talk.app** to the Dock and the
 icon stays there whether it is running or not.
+
+The mark in the menu bar and on the pill is `macos/logo.png`, trimmed to
+its ink at load time and flood-filled with the state colour, so the artwork
+is the single source of truth rather than something redrawn in code.
+
+`build-app.sh` signs with a real codesigning identity if you have one and
+falls back to ad-hoc. Prefer an identity: ad-hoc reduces the designated
+requirement to a bare `cdhash`, so every rebuild looks like a different app
+to macOS and orphans the Accessibility grant.
 
 If it ever misbehaves, `~/Library/Logs/TalkTalkTalk.log` records startup
 (how many hotkeys were claimed, whether Accessibility was granted, which

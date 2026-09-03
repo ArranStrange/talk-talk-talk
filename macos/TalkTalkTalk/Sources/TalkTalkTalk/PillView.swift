@@ -90,8 +90,17 @@ final class PillView: NSView {
         NSColor(srgbRed: 0.08, green: 0.08, blue: 0.10, alpha: 0.92).setFill()
         bg.fill()
 
-        (Look.dot[state] ?? Look.dot["playing"]!).setFill()
-        NSBezierPath(ovalIn: NSRect(x: 21 - 5.5, y: 18 - 5.5, width: 11, height: 11)).fill()
+        let dotColor = Look.dot[state] ?? Look.dot["playing"]!
+        // The waveform mark stands in for the old status dot, centred where
+        // the dot was so the rest of the layout is unchanged.
+        if let mark = Logo.image(height: 15, color: dotColor) {
+            let w = mark.size.width
+            mark.draw(in: NSRect(x: 21 - w / 2, y: 18 - 7.5, width: w, height: 15))
+        } else {
+            dotColor.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 21 - 5.5, y: 18 - 5.5,
+                                        width: 11, height: 11)).fill()
+        }
 
         if state == "playing" {
             Look.barColor.setFill()

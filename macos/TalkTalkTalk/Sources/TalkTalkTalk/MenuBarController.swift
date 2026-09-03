@@ -9,6 +9,7 @@ final class MenuAction: NSObject {
 }
 
 final class MenuBarController: NSObject, NSMenuDelegate {
+    private static var loggedMark = false
     private var item: NSStatusItem?
     private var actions: [MenuAction] = []
     private let coord: Coordinator
@@ -73,12 +74,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     func updateGlyph(state: String) {
         guard let button = item?.button else { return }
-        button.attributedTitle = NSAttributedString(
-            string: MenuBarController.glyph[state] ?? "◍",
-            attributes: [.font: NSFont(name: "Helvetica", size: 14)
-                                ?? .systemFont(ofSize: 14),
-                         .foregroundColor: MenuBarController.colors[state]
-                                ?? MenuBarController.colors["idle"]!])
+        let color = MenuBarController.colors[state] ?? MenuBarController.colors["idle"]!
+        // The mark, recoloured by state. Falls back to the text glyphs if the
+        // bundle has no artwork, so a stripped build still shows something.
+        if let mark = Logo.image(height: 15, color: color) {
+            button.image = mark
+            button.attributedTitle = NSAttributedString(string: "")
+            if !MenuBarController.loggedMark {
+                MenuBarController.loggedMark = true
+                Log.write(String(format: "menu bar mark: %.0fx%.0f pt, trimmed "
+                                 + "aspect %.3f", mark.size.width,
+                                 mark.size.height, Logo.aspect))
+            }
+        } else {
+            button.image = nil
+            button.attributedTitle = NSAttributedString(
+                string: MenuBarController.glyph[state] ?? "◍",
+                attributes: [.font: NSFont(name: "Helvetica", size: 14)
+                                    ?? .systemFont(ofSize: 14),
+                             .foregroundColor: color])
+        }
     }
 
     // MARK: building
