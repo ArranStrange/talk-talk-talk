@@ -70,6 +70,9 @@ local LABELS = {
 
 local PENDING_FILE = KOKORO_DIR .. "/pending.txt"
 local pill = nil
+-- Declared up here, not beside the menu code below: quitTalkTalkTalk()
+-- needs to close over this local to be able to remove the item.
+local menubar = nil
 local currentState = "idle"
 local readyTimer = nil
 local autoRead = hs.settings.get("tttAutoRead") or false
@@ -950,6 +953,10 @@ local function quitTalkTalkTalk()
   end
 end
 
+-- Exposed like the other ttt* globals so the launcher, a script, or a test
+-- can close it without driving the menu.
+tttQuit = quitTalkTalkTalk
+
 -- ---------------------------------------------------------------------------
 -- Menu bar item: always present next to the clock, so the controls and
 -- options are reachable whether or not anything is currently speaking.
@@ -988,7 +995,6 @@ local function writeConfig(cfg)
   if f then f:write(hs.json.encode(cfg)) f:close() end
 end
 
-local menubar = nil
 
 local MENU_COLORS = {
   idle         = { white = 0.55, alpha = 1 },
