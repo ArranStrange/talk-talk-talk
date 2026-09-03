@@ -37,6 +37,9 @@ account, no network calls after install.
   turn it on and longer text gets summarised first, whether you send it to
   speech or to the reader. Anything under ~70 words (a short paragraph) is
   read as-is — no call, no wait — and that threshold is settable in the menu.
+  Summaries are cached for five minutes, so reading something in the reader
+  and then deciding to hear it costs one provider call, not two, and the
+  words you hear are the words you just read.
 - **Silent reader** (`⌃⌥R`) — sends the selection to a full-screen reader
   instead of speaking it, dimming the whole screen down to a single
   centred word with its anchor letter pinned. Hold `R` to advance, release to

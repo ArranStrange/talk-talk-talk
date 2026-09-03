@@ -157,9 +157,17 @@ final class Coordinator {
     /// TLDR decides whether the text is summarised; the caller decides where
     /// it lands. That split is what lets one shortcut serve both modes.
     func deliverFile(_ path: String, to destination: Destination) {
+        let raw = Paths.read(path)
         if !Config().tldrOn || Tldr.tooShort(path) {
-            deliver(Paths.read(path).trimmingCharacters(in: .whitespacesAndNewlines),
+            deliver(raw.trimmingCharacters(in: .whitespacesAndNewlines),
                     to: destination)
+            return
+        }
+        // Already summarised this text a moment ago — reuse it, so reading it
+        // and then hearing it costs one call and gives identical wording.
+        if let cached = SummaryCache.lookup(raw) {
+            Log.write("summary reused from cache")
+            deliver(cached, to: destination)
             return
         }
         guard !tldr.isRunning else { return }
@@ -170,6 +178,7 @@ final class Coordinator {
             switch result {
             case .summary(let summary):
                 self.writeState("idle")
+                SummaryCache.store(summary, for: raw)
                 self.deliver(summary, to: destination)
             case .failed(let message):
                 self.writeState("idle")
