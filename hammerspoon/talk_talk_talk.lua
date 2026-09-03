@@ -12,8 +12,9 @@
 --   ⌃⌥←  rewind 10s                ⌃⌥A  auto-read on/off
 --   ⌃⌥T  TL;DR on/off
 --
--- tttPillFacts() reports the pill's state, position and visibility, which
--- is the quickest way to answer "why can I not see it".
+-- "Quit Talk Talk Talk" releases the keys, stops every timer and watcher and
+-- shuts the daemon down, leaving the rest of Hammerspoon alone. The Dock app
+-- that install.sh creates brings it back.
 
 local KOKORO_DIR = "@@KOKORO_DIR@@"
 local KTTS = KOKORO_DIR .. "/ktts"
@@ -231,6 +232,7 @@ local function toggleAutoRead()
   if autoRead and currentState == "ready" then playPending() end
 end
 
+local hotkeys = {}         -- handles, so "quit" can release the keys
 local updatePillRef = nil  -- set once updatePill is defined below
 local updateMenubarRef = nil  -- set once the menu bar item exists below
 local updateWordRef = nil  -- set once updateWord is defined below
@@ -922,6 +924,32 @@ local function openReaderFromSelection()
   end)
 end
 
+-- Shut Talk Talk Talk down without touching the rest of Hammerspoon: the
+-- daemon frees its ~600MB, the keys are released, and every timer, watcher
+-- and event tap is stopped. The Dock launcher touches the config, whose
+-- reload runs all of this setup again.
+local function quitTalkTalkTalk()
+  ktts("quit")
+  for _, hk in ipairs(hotkeys) do pcall(function() hk:delete() end) end
+  hotkeys = {}
+  for _, t in ipairs({ wordTimer, waveTimer, readyTimer, chipHold, chipFade }) do
+    if t then pcall(function() t:stop() end) end
+  end
+  wordTimer, waveTimer, readyTimer, chipHold, chipFade = nil, nil, nil, nil, nil
+  for _, w in ipairs({ tttPathWatcher, tttFnDictationWatcher, readerTap, dragTap }) do
+    if w then pcall(function() w:stop() end) end
+  end
+  readerTap, dragTap = nil, nil
+  closeReader()
+  if pill then pill:delete() pill = nil end
+  hs.alert.show("Talk Talk Talk closed.\nReopen it from the Dock.", 3)
+  if menubar then
+    local m = menubar
+    menubar = nil
+    hs.timer.doAfter(0.1, function() pcall(function() m:delete() end) end)
+  end
+end
+
 -- ---------------------------------------------------------------------------
 -- Menu bar item: always present next to the clock, so the controls and
 -- options are reachable whether or not anything is currently speaking.
@@ -1213,6 +1241,8 @@ local function buildMenu()
     ktts("quit")
     hs.alert.show("Engine will reload on next use")
   end })
+  sep()
+  add({ title = "Quit Talk Talk Talk", fn = quitTalkTalkTalk })
   return items
 end
 
@@ -1224,19 +1254,19 @@ if menubar then
 end
 
 -- Hotkeys (bound last so they can see the pill state helpers above)
-hs.hotkey.bind({ "ctrl", "alt" }, "s", function() readSelection("speak") end)
-hs.hotkey.bind({ "ctrl", "alt" }, "p", function()
+hotkeys[#hotkeys + 1] = hs.hotkey.bind({ "ctrl", "alt" }, "s", function() readSelection("speak") end)
+hotkeys[#hotkeys + 1] = hs.hotkey.bind({ "ctrl", "alt" }, "p", function()
   if currentState == "ready" then playPending("speak") else ktts("toggle") end
 end)
-hs.hotkey.bind({ "ctrl", "alt" }, "x", function()
+hotkeys[#hotkeys + 1] = hs.hotkey.bind({ "ctrl", "alt" }, "x", function()
   if currentState == "summarising" then cancelSummarise()
   elseif currentState == "ready" then dismissReady()
   else ktts("stop") end
 end)
-hs.hotkey.bind({ "ctrl", "alt" }, "a", toggleAutoRead)
-hs.hotkey.bind({ "ctrl", "alt" }, "left", function() ktts("back") end)
-hs.hotkey.bind({ "ctrl", "alt" }, "r", function() readSelection("reader") end)
-hs.hotkey.bind({ "ctrl", "alt" }, "t", toggleTldr)
+hotkeys[#hotkeys + 1] = hs.hotkey.bind({ "ctrl", "alt" }, "a", toggleAutoRead)
+hotkeys[#hotkeys + 1] = hs.hotkey.bind({ "ctrl", "alt" }, "left", function() ktts("back") end)
+hotkeys[#hotkeys + 1] = hs.hotkey.bind({ "ctrl", "alt" }, "r", function() readSelection("reader") end)
+hotkeys[#hotkeys + 1] = hs.hotkey.bind({ "ctrl", "alt" }, "t", toggleTldr)
 
 -- Auto-pause while dictating with Wispr Flow (hold-Fn): pause speech when
 -- the Fn key goes down, resume where it left off when it is released.

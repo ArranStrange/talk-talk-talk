@@ -44,6 +44,17 @@ account, no network calls after install.
   and it sticks
 - **A CLI** for scripts and pipes: `ktts say`, `ktts clip`, `cat notes.md | ktts say -`
 
+## Closing and reopening it
+
+**Quit Talk Talk Talk** (bottom of the menu) releases the hotkeys, stops
+every timer, watcher and event tap, and shuts the daemon down so it gives
+back its ~600 MB. Hammerspoon keeps running, so anything else you host
+there is untouched.
+
+The installer creates **~/Applications/Talk Talk Talk.app** — drag it to the
+Dock and clicking it brings everything back in about two seconds, by asking
+Hammerspoon to reload rather than restarting it.
+
 ## Requirements
 
 macOS on Apple Silicon or Intel, [Homebrew](https://brew.sh), ~1 GB disk

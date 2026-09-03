@@ -78,7 +78,53 @@ if ! grep -q 'require("talk_talk_talk")' "$INIT" 2>/dev/null; then
   say "Added require(\"talk_talk_talk\") to $INIT"
 fi
 
-# --- 7. Smoke test ---------------------------------------------------------------
+# --- 7. Dock launcher ----------------------------------------------------------
+say "Creating the Talk Talk Talk launcher in ~/Applications"
+APPDIR="$HOME/Applications/Talk Talk Talk.app"
+mkdir -p "$APPDIR/Contents/MacOS"
+cat > "$APPDIR/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Talk Talk Talk</string>
+  <key>CFBundleDisplayName</key><string>Talk Talk Talk</string>
+  <key>CFBundleIdentifier</key><string>com.talktalktalk.launcher</string>
+  <key>CFBundleExecutable</key><string>talk-talk-talk</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
+cat > "$APPDIR/Contents/MacOS/talk-talk-talk" <<'LAUNCH'
+#!/bin/bash
+# Brings the Hammerspoon-hosted UI back after "Quit Talk Talk Talk".
+INIT="$HOME/.hammerspoon/init.lua"
+HS_CLI=""
+for c in /opt/homebrew/bin/hs /usr/local/bin/hs; do
+  [ -x "$c" ] && HS_CLI="$c" && break
+done
+if ! pgrep -x Hammerspoon >/dev/null 2>&1; then
+  open -a Hammerspoon
+  exit 0
+fi
+# Reload re-runs the module's setup without restarting Hammerspoon. Deferred
+# on purpose: hs.reload() tears down the IPC channel, so a direct call never
+# answers and the client hangs waiting for a reply that cannot come.
+if [ -n "$HS_CLI" ]; then
+  "$HS_CLI" -c 'hs.timer.doAfter(0.3, hs.reload)' >/dev/null 2>&1 &
+  sleep 2
+  pgrep -x Hammerspoon >/dev/null 2>&1 && exit 0
+fi
+killall Hammerspoon 2>/dev/null
+sleep 1
+open -a Hammerspoon
+LAUNCH
+chmod +x "$APPDIR/Contents/MacOS/talk-talk-talk"
+touch "$APPDIR"
+
+# --- 8. Smoke test ---------------------------------------------------------------
 say "Smoke test (first run loads the model, ~3s)"
 "$BIN/ktts" say "Talk talk talk is installed." || die "smoke test failed — see $KOKORO/daemon.log"
 
@@ -119,6 +165,9 @@ Talk Talk Talk is installed. Remaining manual steps:
        ]
      }
    }
+
+Drag ~/Applications/Talk Talk Talk.app to the Dock: it reopens the UI
+after you use "Quit Talk Talk Talk" in the menu.
 
 Hotkeys: ⌃⌥S speak selection · ⌃⌥P play/pause · ⌃⌥← rewind ·
          ⌃⌥X stop · ⌃⌥A auto-read toggle

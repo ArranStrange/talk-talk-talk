@@ -128,6 +128,7 @@ paused = False
 say_active = False
 playing_started = False
 stream = None
+streams_open = 0            # live PortAudio streams; must be 0 to re-init
 # RSVP word timeline lives under its OWN lock: the audio callback must
 # never wait on read-along bookkeeping.
 tl_lock = threading.Lock()
@@ -332,13 +333,29 @@ def resample(block, dst_rate):
 
 
 def open_output_stream():
-    """Open the device, tolerating a machine whose audio just changed.
+    """Open the CURRENT default output device, whatever it is now.
 
-    Joining a call, plugging in headphones or switching docks can make
-    CoreAudio reject a stream at our native 24 kHz (seen in the wild as
-    PortAudio -9986 / AUHAL -50). Fall back to whatever the current default
-    device actually wants and resample into it, rather than going silent.
+    PortAudio snapshots the device list when it initialises, and this daemon
+    is long-lived: without re-initialising, a daemon started before you put
+    your headphones on keeps talking to the built-in speakers forever, and
+    no amount of reconnecting moves it. So re-read the devices on every
+    stream, then fall back through sample rates the device will accept,
+    since headphones at 44.1 kHz will refuse the model's native 24 kHz
+    (seen in the wild as PortAudio -9986 / AUHAL -50).
     """
+    # Terminating PortAudio while a stream is open is undefined behaviour.
+    # stream is cleared the moment an utterance is replaced, so it is not a
+    # safe signal on its own: wait for the writer thread to actually close.
+    for _ in range(40):
+        with lock:
+            if streams_open == 0:
+                break
+        time.sleep(0.025)
+    try:
+        sd._terminate()
+        sd._initialize()
+    except Exception as e:
+        print(f"could not refresh audio devices: {e}", flush=True)
     attempts = [SR]
     try:
         default = float(sd.query_devices(kind="output")["default_samplerate"])
@@ -353,9 +370,12 @@ def open_output_stream():
             s = sd.OutputStream(samplerate=rate, channels=1, dtype="float32",
                                 blocksize=0, latency="high")
             s.start()
-            if rate != SR:
-                print(f"audio device refused {SR} Hz; using {rate} Hz",
-                      flush=True)
+            name = "?"
+            try:
+                name = sd.query_devices(kind="output")["name"]
+            except Exception:
+                pass
+            print(f"audio out: {name} at {rate} Hz", flush=True)
             return s, rate
         except Exception as e:
             print(f"audio open at {rate} Hz failed: {e}", flush=True)
@@ -372,7 +392,7 @@ def player_worker(gen):
     audio sounded rough. sd.write() instead blocks in C with the GIL
     released, and PortAudio's own buffer covers any stall on this side.
     """
-    global stream, playing_started, say_active, cursor
+    global stream, playing_started, say_active, cursor, streams_open
 
     while True:  # wait for enough audio to start on
         with lock:
@@ -399,7 +419,9 @@ def player_worker(gen):
         print("playback aborted: no usable audio device", flush=True)
         return
     with lock:
+        streams_open += 1
         if generation != gen:
+            streams_open -= 1
             s.close()
             return
         stream = s
@@ -438,8 +460,11 @@ def player_worker(gen):
             try:
                 s.write(resample(silence if out is None else out, rate))
             except Exception as e:
-                # device pulled out from under us mid-sentence
-                print(f"audio write failed, stopping: {e}", flush=True)
+                with lock:
+                    replaced = (generation != gen)
+                if not replaced:
+                    # a genuine device failure, not just a newer utterance
+                    print(f"audio write failed, stopping: {e}", flush=True)
                 break
     finally:
         done = False
@@ -454,6 +479,8 @@ def player_worker(gen):
             s.close()
         except Exception:
             pass
+        with lock:
+            streams_open = max(0, streams_open - 1)
         if done:
             set_state("idle")
 
@@ -478,6 +505,7 @@ def stop_playback():
     if old_stream is not None:
         try:
             old_stream.abort()
+            old_stream.close()   # must be closed before PortAudio re-inits
         except Exception:
             pass
     set_state("idle")
