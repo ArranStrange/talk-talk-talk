@@ -29,6 +29,7 @@ final class Coordinator {
         menu?.install()
 
         watcher = StateWatcher { [weak self] in self?.refresh() }
+        watcher?.onWord = { [weak self] in self?.pill.wordFileChanged() }
         watcher?.start()
 
         let fn = FnWatcher { [weak self] in self?.state ?? "idle" }

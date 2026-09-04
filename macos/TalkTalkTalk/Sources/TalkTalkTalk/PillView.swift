@@ -40,6 +40,19 @@ final class PillView: NSView {
     private var hitRects: [(PillHit, NSRect)] = []
     private(set) var drawerOpen = false
 
+    /// The word's layout is recomputed only when the word, the width or the
+    /// paused state changes — not on every waveform tick.
+    private var drawerLayout: Rsvp.Layout?
+    private var drawerLayoutKey = ""
+
+    /// Regions for partial invalidation, so a waveform tick does not redraw
+    /// the drawer and a new word does not redraw the buttons.
+    var waveRect: NSRect { NSRect(x: 38, y: 4, width: 44, height: 28) }
+    var drawerRect: NSRect {
+        NSRect(x: 0, y: PillView.pillHeight, width: bounds.width,
+               height: max(0, bounds.height - PillView.pillHeight))
+    }
+
     static let barCount = 5
     static let pillHeight: CGFloat = 36
     static let drawerHeight: CGFloat = 92
@@ -102,7 +115,7 @@ final class PillView: NSView {
                                         width: 11, height: 11)).fill()
         }
 
-        if state == "playing" {
+        if state == "playing", dirty.intersects(waveRect) {
             Look.barColor.setFill()
             for i in 0..<PillView.barCount {
                 let bh = waveHeights[i]
@@ -132,7 +145,7 @@ final class PillView: NSView {
         draw("✕", in: rect(.close), size: 13,
              color: NSColor(white: 1, alpha: 0.45), align: .center)
 
-        if drawerOpen { drawDrawer(width: w) }
+        if drawerOpen, dirty.intersects(drawerRect) { drawDrawer(width: w) }
     }
 
     /// The read-along word, its anchor letter pinned to a fixed x so the eye
@@ -141,10 +154,15 @@ final class PillView: NSView {
         guard !word.isEmpty else { return }
         let left: CGFloat = 14, right = w - 14, y: CGFloat = 46
         let anchorX = left + (right - left) * Rsvp.anchorFraction
-        guard let l = Rsvp.layout(word, baseSize: 26, minSize: 12,
-                                  leftRoom: anchorX - left,
-                                  rightRoom: right - anchorX,
-                                  dimmed: state == "paused") else { return }
+        let key = "\(word)|\(Int(w))|\(state == "paused")"
+        if key != drawerLayoutKey {
+            drawerLayoutKey = key
+            drawerLayout = Rsvp.layout(word, baseSize: 26, minSize: 12,
+                                       leftRoom: anchorX - left,
+                                       rightRoom: right - anchorX,
+                                       dimmed: state == "paused")
+        }
+        guard let l = drawerLayout else { return }
         l.attributed.draw(at: NSPoint(x: anchorX - l.anchorOffset, y: y))
         NSColor(white: 1, alpha: 0.25).setFill()
         NSBezierPath(rect: NSRect(x: anchorX - 0.75, y: y - 7, width: 1.5, height: 6)).fill()

@@ -160,7 +160,7 @@ final class PillController: NSObject, NSWindowDelegate {
         waveTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
             guard let v = self?.view else { return }
             v.waveHeights = (0..<PillView.barCount).map { _ in CGFloat.random(in: 5...24) }
-            v.needsDisplay = true
+            v.setNeedsDisplay(v.waveRect)     // the bars only, not the drawer
         }
     }
 
@@ -169,18 +169,26 @@ final class PillController: NSObject, NSWindowDelegate {
         waveTimer = nil
     }
 
-    /// Polled rather than watched: the word file changes at speech pace and
-    /// filesystem notifications coalesce too slowly to keep up.
+    /// Words arrive from the FSEvents stream (see Coordinator), which fires
+    /// within ~20 ms of the daemon's write. This poll is only a safety net
+    /// for a missed event, so it runs slowly.
     private func startWordPoll() {
         guard wordTimer == nil else { return }
-        wordTimer = Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { [weak self] _ in
-            guard let self, let v = self.view else { return }
-            let w = Paths.read(Paths.word).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard w != self.lastWord else { return }
-            self.lastWord = w
-            v.word = w
-            v.needsDisplay = true
+        wordTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.wordFileChanged()
         }
+        wordFileChanged()
+    }
+
+    /// Read the published word and redraw the drawer if it changed. Cheap
+    /// enough to call on every event; does nothing when the drawer is shut.
+    func wordFileChanged() {
+        guard let v = view, v.drawerOpen else { return }
+        let w = Paths.read(Paths.word).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard w != lastWord else { return }
+        lastWord = w
+        v.word = w
+        v.setNeedsDisplay(v.drawerRect)      // the drawer only, not the buttons
     }
 
     private func stopWordPoll() {

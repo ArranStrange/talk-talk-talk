@@ -17,10 +17,19 @@ enum Rsvp {
         return 5
     }
 
+    /// NSFont(name:size:) goes through the font registry every call; the
+    /// drawer asked for it four times per word, on every redraw.
+    private static var fonts: [CGFloat: NSFont] = [:]
+    static func font(_ size: CGFloat) -> NSFont {
+        if let f = fonts[size] { return f }
+        let f = NSFont(name: font, size: size) ?? .boldSystemFont(ofSize: size)
+        fonts[size] = f
+        return f
+    }
+
     static func measure(_ s: String, size: CGFloat) -> CGFloat {
         guard !s.isEmpty else { return 0 }
-        let f = NSFont(name: font, size: size) ?? .boldSystemFont(ofSize: size)
-        return (s as NSString).size(withAttributes: [.font: f]).width
+        return (s as NSString).size(withAttributes: [.font: font(size)]).width
     }
 
     /// The word split around its anchor letter, with the size shrunk only as
@@ -49,7 +58,7 @@ enum Rsvp {
         if rightNeed > 0 { scale = min(scale, rightRoom / rightNeed) }
         if scale < 1 { size = max(minSize, floor(size * scale)) }
 
-        let f = NSFont(name: font, size: size) ?? .boldSystemFont(ofSize: size)
+        let f = font(size)
         let base = NSColor(white: 1, alpha: dimmed ? 0.5 : 0.97)
         let s = NSMutableAttributedString(string: word,
                                           attributes: [.font: f, .foregroundColor: base])

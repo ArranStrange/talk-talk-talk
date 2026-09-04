@@ -8,6 +8,11 @@ import Foundation
 final class StateWatcher {
     private var stream: FSEventStreamRef?
     private let onChange: () -> Void
+    /// Fired when the daemon publishes a new word. Replaces a 60 ms poll of
+    /// the file: the stream is already watching this directory, so reacting
+    /// to the write costs nothing extra and wakes the app only when the word
+    /// actually changes.
+    var onWord: (() -> Void)?
 
     init(onChange: @escaping () -> Void) { self.onChange = onChange }
 
@@ -20,10 +25,13 @@ final class StateWatcher {
             // set below. Without that flag it is a raw char ** and casting it
             // to NSArray segfaults on the first event.
             let list = unsafeBitCast(paths, to: CFArray.self) as? [String] ?? []
-            let touchedState = list.isEmpty || list.contains {
-                ($0 as NSString).lastPathComponent == "state"
+            let names = Set(list.map { ($0 as NSString).lastPathComponent })
+            if list.isEmpty || names.contains("state") {
+                DispatchQueue.main.async { me.onChange() }
             }
-            if touchedState { DispatchQueue.main.async { me.onChange() } }
+            if names.contains("word") {
+                DispatchQueue.main.async { me.onWord?() }
+            }
             _ = count
         }
         var ctx = FSEventStreamContext(
