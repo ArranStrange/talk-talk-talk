@@ -432,6 +432,7 @@ def player_worker(gen):
 
     silence = np.zeros(BLOCK, dtype=np.float32)
     starved = False
+    underflows = 0   # PortAudio ran dry mid-write
     _t0 = time.time()
     try:
         while True:
@@ -458,7 +459,10 @@ def player_worker(gen):
                             out = buffer[cursor:cursor + n].copy()
                             cursor += n
             try:
-                s.write(resample(silence if out is None else out, rate))
+                # write() returns True if the device underflowed — the glitch
+                # you actually hear, one level below the daemon's own buffer.
+                if s.write(resample(silence if out is None else out, rate)):
+                    underflows += 1
             except Exception as e:
                 with lock:
                     replaced = (generation != gen)
@@ -467,6 +471,10 @@ def player_worker(gen):
                     print(f"audio write failed, stopping: {e}", flush=True)
                 break
     finally:
+        # One line per utterance so a rough-sounding session leaves a
+        # record that can be read afterwards, without replaying anything.
+        print(f"utterance ended: {underflows} PortAudio underflows over "
+              f"{time.time()-_t0:.1f}s", flush=True)
         done = False
         with lock:
             if generation == gen:

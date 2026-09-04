@@ -39,8 +39,21 @@ enum Daemon {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: Paths.venvPython)
         p.arguments = [Paths.daemonScript]
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
+        // Same destination ktts uses. Discarding this output hid every
+        // underrun and device message the daemon printed, which turned a
+        // "why is it glitchy" question into guesswork.
+        let logPath = Paths.kokoroDir + "/daemon.log"
+        if !FileManager.default.fileExists(atPath: logPath) {
+            FileManager.default.createFile(atPath: logPath, contents: nil)
+        }
+        if let log = FileHandle(forWritingAtPath: logPath) {
+            log.seekToEndOfFile()
+            p.standardOutput = log
+            p.standardError = log
+        } else {
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+        }
         do { try p.run() } catch { return false }
         for _ in 0..<80 {                       // up to 8 s: first run loads the model
             if let fd = connectFd() { close(fd); return true }
