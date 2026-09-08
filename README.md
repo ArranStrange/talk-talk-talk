@@ -227,7 +227,12 @@ Markdown is converted for the ear rather than stripped:
 | List items | a sentence each, so they do not blur together |
 
 Paragraph, heading, table and code boundaries get a 420 ms pause; a long
-dash gets 200 ms; sentences within a paragraph get 120 ms. That pacing is
+dash gets 200 ms (`dash_pause_ms`); sentences within a paragraph get
+120 ms. The dash pause is spliced into the rendered audio at the nearest
+quiet point, ramped in and out, rather than by splitting the text: a split
+costs a synthesis call per fragment, and "Yes — no — maybe, we will see."
+measured 2,677 ms as three chunks against 964 ms as one — slower than
+realtime, which is what starves playback. That pacing is
 what makes a long document navigable by ear.
 
 The dotted-name and dash rules live in the daemon rather than the

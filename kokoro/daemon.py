@@ -234,40 +234,18 @@ def split_chunks(text, max_len=140, first_limits=FIRST_LIMITS):
     out = []
     paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
     for para in paragraphs:
-        # Dashes divide the paragraph first. Doing it after sentence
-        # grouping meant the length limit could split the text before the
-        # dash was seen, and the boundary was lost.
-        for s, segment in enumerate(split_at_dashes(para)):
-            # the ramp is by chunk count across the whole text, so a
-            # one-line heading does not spend it
-            limits = list(first_limits[len(out):]) + [max_len]
-            for i, piece in enumerate(split_sentences(segment, limits)):
-                if not out:
-                    gap = 0
-                elif i:
-                    gap = CHUNK_GAP
-                else:
-                    gap = DASH_GAP if s else PARA_GAP
-                out.append((piece, gap))
+        # the ramp is by chunk count across the whole text, so a one-line
+        # heading does not spend it
+        limits = list(first_limits[len(out):]) + [max_len]
+        for i, piece in enumerate(split_sentences(para, limits)):
+            gap = 0 if not out else (PARA_GAP if i == 0 else CHUNK_GAP)
+            # The length limit can split exactly at a dash, leaving the
+            # marker as this chunk's first token where a splice cannot
+            # place it. The chunk's own lead gap carries the pause instead.
+            if out and piece.lstrip().startswith(DASH_MARK):
+                gap = max(gap, dash_pause())
+            out.append((piece, gap))
     return out
-
-
-def split_at_dashes(para):
-    """Divide a paragraph at long dashes, so each becomes a chunk boundary
-    carrying real silence.
-
-    The dash is dropped and a comma left in its place, so the voice has a
-    comma's prosody and the read-along drawer never shows a bare "—". Sides
-    shorter than DASH_MIN_SIDE are left joined: a hard boundary there would
-    spend a synthesis call on a couple of words.
-    """
-    parts = [p.strip() for p in DASH_SPLIT.split(para)]
-    if len(parts) == 1:
-        return [para]
-    if any(len(p) < DASH_MIN_SIDE for p in parts):
-        return [DASH_SPLIT.sub(", ", para)]
-    ends = (",", ".", "!", "?", ";", ":")
-    return [p if p.endswith(ends) else p + "," for p in parts[:-1]] + [parts[-1]]
 
 
 # Long dashes: espeak gives an em dash about as much silence as a comma, and
@@ -276,7 +254,13 @@ def split_at_dashes(para):
 # real silence — but only when both sides are substantial, so "yes — no —
 # maybe" is not chopped into three synthesis calls.
 DASH_SPLIT = re.compile(r"\s+(?:[\u2014\u2013]|--?)\s+")
-DASH_MIN_SIDE = 20
+# A marker token left where the dash was. It never reaches the synthesiser
+# or the read-along drawer; it only says where to splice silence into the
+# rendered audio. Splitting the text at the dash instead would cost a
+# synthesis call per fragment: "Yes - no - maybe, we will see." measured
+# 2677 ms as three chunks against 964 ms as one, i.e. slower than realtime,
+# which is the buffer-starvation condition. Splicing costs nothing.
+DASH_MARK = "\x00"
 
 # Dotted names. espeak passes "." through as a phrase break and never says
 # it: "daemon.log" phonemises to dˈiːmən.lˈɔɡ ("demon, log") and, worse,
@@ -312,12 +296,125 @@ def speech_text(text):
     """
     text = _DOTTED.sub(_expand_dotted, text)
     text = _CALL.sub(" function", text)      # phonemize() -> phonemize function
+    # A long dash becomes a comma, for the voice's prosody, plus a marker
+    # saying "pause here". espeak gives an em dash about as much silence as
+    # a comma and an en dash or hyphen less, so a dash read as no pause.
+    text = DASH_SPLIT.sub(", " + DASH_MARK + " ", text)
     return text
+
+
+def strip_marks(marked):
+    """The text as spoken and displayed: no markers."""
+    return " ".join(t for t in marked.split() if t != DASH_MARK)
+
+
+def mark_indices(marked):
+    """Word index each marker sits in front of."""
+    out, n = [], 0
+    for tok in marked.split():
+        if tok == DASH_MARK:
+            out.append(n)
+        else:
+            n += 1
+    return out
+
+
+def word_offsets(words, n_samples):
+    """Estimated start offset of each word within a chunk's samples."""
+    weights = word_weights(words)
+    total = sum(weights) or 1.0
+    offsets, acc = [], 0.0
+    for w in weights:
+        offsets.append(int(n_samples * acc / total))
+        acc += w
+    return offsets
+
+
+def snap_to_quiet(samples, target, search):
+    """Offset of the quietest 10 ms window within +/-search of target.
+
+    Where a word starts is only known to ~120 ms here, and splicing silence
+    into the middle of a syllable would be audible. The comma already
+    leaves a dip; land in it.
+    """
+    win = SR // 100
+    lo = max(0, target - search)
+    hi = min(len(samples) - win, target + search)
+    if hi <= lo:
+        return max(0, min(target, len(samples)))
+    n = (hi - lo) // win
+    if n < 1:
+        return target
+    frames = samples[lo:lo + n * win].reshape(n, win)
+    rms = np.sqrt((frames ** 2).mean(axis=1))
+    return lo + int(np.argmin(rms)) * win
+
+
+SPLICE_FADE = int(0.012 * SR)   # 12 ms ramp either side of spliced silence
+
+
+def insert_dash_pauses(samples, words, marks, pause):
+    """Splice `pause` samples of silence at each marked word boundary.
+
+    Returns (samples, inserts) with inserts as [(offset, added, word_index)]
+    in the ORIGINAL sample domain, so the word timeline can be shifted.
+
+    The insertion point is the quietest window near the estimated word
+    start, and the audio is ramped down into the silence and back up out of
+    it. Where a word begins is only known to ~120 ms here, so a splice can
+    land inside a syllable; the ramps make that a clean short pause rather
+    than a click.
+    """
+    if not marks or pause <= 0 or len(samples) == 0:
+        return samples, []
+    offsets = word_offsets(words, len(samples))
+    inserts = []
+    for idx in marks:
+        if 0 < idx < len(offsets):
+            inserts.append((snap_to_quiet(samples, offsets[idx], SR // 6),
+                            pause, idx))
+    if not inserts:
+        return samples, []
+    inserts.sort()
+    out, prev = [], 0
+    for pos, added, _ in inserts:
+        piece = samples[prev:pos].copy()
+        if len(piece) >= SPLICE_FADE:
+            piece[-SPLICE_FADE:] *= _FADE_RAMP[::-1][:SPLICE_FADE]
+        out.append(piece)
+        out.append(np.zeros(added, dtype=np.float32))
+        prev = pos
+    tail = samples[prev:].copy()
+    if len(tail) >= SPLICE_FADE:
+        tail[:SPLICE_FADE] *= _FADE_RAMP[:SPLICE_FADE]
+    out.append(tail)
+    return np.concatenate(out), inserts
+
+
+def shift_entries(entries, inserts):
+    """Move timeline entries later by the silence spliced in before them.
+
+    By word index, not sample offset: the splice is snapped to nearby quiet,
+    so its position and the word's estimated start need not agree, and
+    comparing offsets left the marked word on the wrong side of its pause.
+    """
+    if not inserts:
+        return entries
+    return [(start + sum(a for _, a, idx in inserts if idx <= i), word)
+            for i, (start, word) in enumerate(entries)]
 
 
 FADE = int(0.015 * SR)      # 15ms edge fade per chunk: kills boundary clicks
 CHUNK_GAP = int(0.12 * SR)  # between sentences
-DASH_GAP = int(0.20 * SR)   # at a long dash: longer than a comma, short of a stop
+DASH_PAUSE_MS = 200         # at a long dash: longer than a comma, short of a stop
+
+
+def dash_pause():
+    """Silence spliced at a long dash. Tunable: dash_pause_ms in config."""
+    try:
+        return int(SR * float(_cfg_value("dash_pause_ms", DASH_PAUSE_MS)) / 1000)
+    except (TypeError, ValueError):
+        return int(SR * DASH_PAUSE_MS / 1000)
 PARA_GAP = int(0.42 * SR)   # after a heading, paragraph or block
 
 
@@ -400,20 +497,25 @@ def synth_worker(gen, text, voice, speed, lang):
             if generation != gen:
                 print(f"utterance replaced after {chunks_done} chunks", flush=True)
                 return
+        spoken = strip_marks(chunk)
+        marks = mark_indices(chunk)
         try:
             with synth_lock:
                 if generation != gen:
                     return
                 t_render = time.time()
                 samples, _ = kokoro.create(
-                    chunk, voice=voice, speed=speed, lang=lang)
+                    spoken, voice=voice, speed=speed, lang=lang)
                 t_render = time.time() - t_render
         except Exception as e:
             # never silent: a chunk that will not synthesize is the
             # difference between a full reading and a truncated one
-            print(f"synth failed on {chunk[:60]!r}: {e}", flush=True)
+            print(f"synth failed on {spoken[:60]!r}: {e}", flush=True)
             continue
         samples = smooth_edges(np.asarray(samples, dtype=np.float32))
+        orig_len = len(samples)
+        samples, inserts = insert_dash_pauses(
+            samples, spoken.split(), marks, dash_pause())
         lead_gap = gap
         n = len(samples) + lead_gap
         # grow (rare): build the bigger array outside the lock
@@ -427,7 +529,9 @@ def synth_worker(gen, text, voice, speed, lang):
         # Built before taking the audio lock — this thread is the only
         # writer of buf_len, so reading it here is safe, and the regex
         # work must not happen while the writer may be waiting.
-        entries = build_timeline(chunk, buf_len, n, lead_gap, lang)
+        entries = shift_entries(
+            build_timeline(spoken, buf_len, orig_len + lead_gap, lead_gap, lang),
+            inserts)
         with lock:
             if generation != gen:
                 return
@@ -438,7 +542,7 @@ def synth_worker(gen, text, voice, speed, lang):
             # Under the lock, so the gate never sees the audio without the
             # count (it used to be incremented after the lock was released).
             chunks_done += 1
-            plan["rchars"] += len(chunk)
+            plan["rchars"] += len(spoken)
             plan["rsecs"] += t_render
             # Per-call overhead swamps a tiny chunk (a heading), so its
             # rate would say the machine is slow and the gate would wait
@@ -452,7 +556,7 @@ def synth_worker(gen, text, voice, speed, lang):
             # The heuristic timeline is in place immediately, so nothing waits
             # on this. The alignment worker refines it when playback can
             # afford the competition — see align_worker().
-            align_queue.append((gen, chunk, samples, buf_len - n + lead_gap, entries))
+            align_queue.append((gen, spoken, samples, buf_len - n + lead_gap, entries))
     with lock:
         if generation == gen:
             synth_done = True
