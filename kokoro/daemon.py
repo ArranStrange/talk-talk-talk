@@ -270,30 +270,32 @@ def smooth_edges(samples):
 
 
 def word_weights(words, lang="en-us"):
-    """Relative duration per word for the heuristic timeline.
+    """Relative duration per word for the heuristic timeline. Zero cost.
 
-    Phoneme count from the same espeak-ng phonemiser Kokoro uses, so "SFG20"
-    (spoken "S F G twenty") weighs what it costs to say rather than the one
-    vowel group the old regex found. Measured against Parakeet on the same
-    audio: 90th-percentile error 334 ms with vowel groups, 173 ms with
-    phonemes. This is the fallback and the first ~180 ms of a chunk; with
-    read-along on, refine_timeline() replaces it with aligned onsets.
+    Vowel groups as a syllable proxy, with two things the plain regex got
+    wrong: an all-caps token is spelled out (one beat per letter) and digits
+    are read as numbers (about two beats each), so "SFG20" weighs ~7 rather
+    than 1. A pause for trailing punctuation.
+
+    Do NOT phonemise here. kokoro.tokenizer.phonemize() costs ~680 ms per
+    call on this stack (measured), and a per-word call put 11 s into the
+    synthesis loop for one 18-word chunk. With read-along on, Parakeet
+    replaces these numbers within a chunk of playback anyway; this is only
+    the first ~180 ms and the fallback.
     """
     weights = []
     for w in words:
-        weight = None
-        try:
-            bare = re.sub(r"[^A-Za-z0-9']", " ", w).strip()
-            if bare:
-                ph = kokoro.tokenizer.phonemize(bare, lang)
-                weight = float(len(re.sub(r"\s", "", ph)))
-        except Exception:
-            weight = None
-        if not weight:
-            weight = float(max(1, len(re.findall(r"[aeiouyAEIOUY]+", w))))
+        core = re.sub(r"[^A-Za-z0-9']", "", w)
+        letters = re.sub(r"[^A-Za-z]", "", core)
+        digits = len(re.findall(r"[0-9]", core))
+        if letters and letters.isupper() and len(letters) >= 2 and not re.search(r"[aeiou]{2}", letters.lower()):
+            beats = float(len(letters))            # an acronym, said letter by letter
+        else:
+            beats = float(max(1, len(re.findall(r"[aeiouyAEIOUY]+", letters)))) if letters else 0.0
+        beats += 2.0 * digits
         if re.search(r"[.,!?;:]$", w):
-            weight += 3.0        # a pause, in phoneme-sized units
-        weights.append(max(1.0, weight))
+            beats += 0.6
+        weights.append(max(1.0, beats))
     return weights
 
 

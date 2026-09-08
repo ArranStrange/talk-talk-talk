@@ -53,11 +53,14 @@ Kokoro's ONNX build returns audio with no word timestamps, so timings are
 
 1. Synthesis already knows each chunk's exact sample span in the buffer
    (`[chunk_start, chunk_end]`, including the inter-chunk gap).
-2. Split the chunk text into words. Weight each word by its phoneme count
-   from the same espeak-ng phonemiser Kokoro uses (plus a pause for
-   trailing punctuation), so "SFG20" weighs what it costs to say. Measured
-   against Parakeet on the same audio, the old vowel-group regex was off by
-   a mean of 122 ms and up to half a second; phoneme counts halve the tail.
+2. Split the chunk text into words. Weight each word by vowel groups as a
+   syllable proxy, with acronyms counted a beat per letter and digits two
+   beats each (so "SFG20" weighs ~7, not 1), plus a pause for trailing
+   punctuation. This must stay free: `kokoro.tokenizer.phonemize()` costs
+   ~680 ms a call on this stack, and a per-word call put 11 s into the
+   synthesis loop for one chunk. Measured against Parakeet on the same
+   audio the vowel heuristic is off by a mean of 122 ms and up to half a
+   second — which is why step 4 exists.
 3. Distribute the chunk's samples across words proportionally to weight,
    producing a timeline of `(sample_start, word)` entries appended under
    the existing lock. A paragraph gap gets a blank entry so the drawer
