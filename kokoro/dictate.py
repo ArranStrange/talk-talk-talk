@@ -131,13 +131,19 @@ class Engine:
         self.llm = None
         self.tok = None
         self.vad = Vad()
+        # KV cache of the system prompt, keyed by its text (it varies with the
+        # app being pasted into and the dictionary). Measured: processing the
+        # 347-token prefix cost ~0.9-1.3 s of every cleanup; with the cache
+        # only the transcript's ~50 tokens are processed, ~0.3 s.
+        self._prefix = {}          # rules text -> (token ids, filled cache)
+        self._prefix_order = []    # for a small LRU
         self.last_used = 0.0
         self.load_lock = threading.Lock()
         threading.Thread(target=self._idle_watch, daemon=True).start()
 
     # -- loading -----------------------------------------------------------
 
-    def warm(self, need_llm=None):
+    def warm(self, need_llm=None, context=""):
         """Load whatever is not loaded. Safe to call repeatedly.
 
         The transcriber is required; the cleanup model is not. If it cannot
@@ -174,12 +180,59 @@ class Engine:
                     self.llm = self.tok = None
                     print(f"dictation: cleanup model unavailable, using raw "
                           f"transcripts: {str(e).splitlines()[0][:160]}", flush=True)
+            # Warm-up: the first transcription and first generation after a
+            # load each pay ~1 s of kernel compilation. Spend it now, while
+            # the key is still held, rather than on the user's first sentence.
+            if self.stt is not None and not getattr(self, "_stt_warm", False):
+                try:
+                    self._transcribe_samples(np.zeros(SR // 2, dtype=np.float32))
+                    self._stt_warm = True
+                except Exception:
+                    pass
+            if self.llm is not None:
+                try:
+                    self._prefix_for(context)      # builds the cache; compiles kernels
+                except Exception as e:
+                    print(f"dictation: prefix cache failed: {e}", flush=True)
         self.last_used = time.time()
+
+    def _prefix_for(self, context):
+        """(prefix token ids, KV cache) for the system prompt of `context`.
+
+        Built once per distinct rules text and reused; a small LRU because
+        the set of apps dictated into is small.
+        """
+        import copy
+        import mlx.core as mx
+        from mlx_lm.models.cache import make_prompt_cache
+        rules = self._system_rules(context)
+        hit = self._prefix.get(rules)
+        if hit is None:
+            marker = " MARK "
+            with_marker = self._chat(rules, marker)
+            prefix_text = with_marker[:with_marker.index(marker)]
+            ids = self.tok.encode(prefix_text)
+            cache = make_prompt_cache(self.llm)
+            t = time.time()
+            self.llm(mx.array(ids)[None], cache=cache)
+            mx.eval([c.state for c in cache])
+            hit = (ids, cache)
+            self._prefix[rules] = hit
+            self._prefix_order.append(rules)
+            if len(self._prefix_order) > 8:
+                self._prefix.pop(self._prefix_order.pop(0), None)
+            print(f"dictation: cached {len(ids)}-token prompt prefix in "
+                  f"{(time.time()-t)*1000:.0f} ms", flush=True)
+        ids, cache = hit
+        return ids, copy.deepcopy(cache)   # generation mutates the cache
 
     def unload(self):
         with self.lock:
             had = self.stt is not None or self.llm is not None
             self.stt = self.llm = self.tok = None
+            self._prefix.clear()
+            self._prefix_order.clear()
+            self._stt_warm = False
         if had:
             gc.collect()
             try:
@@ -213,7 +266,7 @@ class Engine:
             return {"ok": False, "msg": "nothing was said"}
 
         try:
-            self.warm(need_llm=cleanup)
+            self.warm(need_llm=cleanup, context=context)   # same prefix the cleanup will use
         except Exception as e:
             return {"ok": False, "msg": f"transcriber failed to load: {str(e).splitlines()[0][:160]}"}
         if self.stt is None:
@@ -275,11 +328,10 @@ class Engine:
             out.append(m.group(1) + m.group(2).upper() + m.group(3) if m else line)
         return "\n".join(out)
 
-    def _cleanup(self, raw, context):
-        from mlx_lm import generate
-        cfg = _config()
+    def _system_rules(self, context):
+        """The instructions, minus the transcript. Kept separate so the
+        prefix can be measured and cached independently of each request."""
         words = _dictionary()
-        raw = self.apply_spoken_formatting(raw)
         rules = [
             "You are a dictation cleanup filter. Return the cleaned text and nothing else.",
             "You are an editor, not a writer: the speaker's own words, sentence "
@@ -308,21 +360,44 @@ class Engine:
             rules.append("Spell these exactly as written: " + ", ".join(words) + ".")
         if context:
             rules.append(f"The text will be pasted into {context}.")
-        messages = [
-            {"role": "system", "content": "\n".join(rules)},
-            {"role": "user", "content": raw},
-        ]
+        return "\n".join(rules)
+
+    def _chat(self, rules, user):
+        messages = [{"role": "system", "content": rules},
+                    {"role": "user", "content": user}]
         try:
-            prompt = self.tok.apply_chat_template(
+            return self.tok.apply_chat_template(
                 messages, add_generation_prompt=True, tokenize=False,
                 enable_thinking=False)
         except TypeError:
-            prompt = self.tok.apply_chat_template(
+            return self.tok.apply_chat_template(
                 messages, add_generation_prompt=True, tokenize=False)
+
+    def build_prompt(self, raw, context):
+        return self._chat(self._system_rules(context), raw)
+
+    def _cleanup(self, raw, context):
+        from mlx_lm import stream_generate
+        raw = self.apply_spoken_formatting(raw)
+        full_ids = self.tok.encode(self.build_prompt(raw, context))
         max_tokens = min(2048, max(64, int(len(raw.split()) * 3)))
-        out = generate(self.llm, self.tok, prompt=prompt,
-                       max_tokens=max_tokens, verbose=False)
-        out = out.strip()
+        prompt_ids, cache = full_ids, None
+        try:
+            prefix_ids, cache = self._prefix_for(context)
+            if full_ids[:len(prefix_ids)] == prefix_ids:
+                prompt_ids = full_ids[len(prefix_ids):]
+            else:
+                cache = None            # tokeniser merged across the boundary; go uncached
+        except Exception as e:
+            print(f"dictation: prefix cache unavailable: {e}", flush=True)
+            cache = None
+        pieces = []
+        for r in stream_generate(self.llm, self.tok, prompt_ids,
+                                 max_tokens=max_tokens, prompt_cache=cache):
+            pieces.append(r.text)
+            if r.finish_reason:
+                break
+        out = "".join(pieces).strip()
         # trailing spaces before line breaks are a model tic, not formatting
         out = "\n".join(line.rstrip() for line in out.splitlines()).strip()
         # strip a stray thinking block or code fence if the model insisted

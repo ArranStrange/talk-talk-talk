@@ -99,8 +99,10 @@ final class DictationController {
             return
         }
         // Load the models while the key is held, so the wait after release
-        // is transcription alone.
-        Daemon.command("dictation_warm")
+        // is transcription alone. The frontmost app goes along so the engine
+        // can pre-cache the matching prompt prefix too.
+        Daemon.send(["cmd": "dictation_warm",
+                     "context": NSWorkspace.shared.frontmostApplication?.localizedName ?? ""])
         // Speech from the speakers would otherwise end up in the transcript.
         if coord?.state == "playing" {
             pausedSpeech = true

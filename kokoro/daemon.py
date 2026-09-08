@@ -669,7 +669,11 @@ def handle(req):
     # that only ever uses speech pays nothing for it.
     if cmd == "dictation_warm":
         import dictate
-        threading.Thread(target=dictate.engine().warm, daemon=True).start()
+        # The app sends the frontmost app's name so the matching prompt
+        # prefix is cached while the key is still held.
+        threading.Thread(target=dictate.engine().warm,
+                         kwargs={"context": str(req.get("context") or "")},
+                         daemon=True).start()
         return {"ok": True, "msg": "warming"}
     if cmd == "dictation_unload":
         import dictate
