@@ -234,20 +234,90 @@ def split_chunks(text, max_len=140, first_limits=FIRST_LIMITS):
     out = []
     paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
     for para in paragraphs:
-        # the ramp is by chunk count across the whole text, so a one-line
-        # heading does not spend it
-        limits = list(first_limits[len(out):]) + [max_len]
-        for i, piece in enumerate(split_sentences(para, limits)):
-            if not out:
-                gap = 0
-            else:
-                gap = PARA_GAP if i == 0 else CHUNK_GAP
-            out.append((piece, gap))
+        # Dashes divide the paragraph first. Doing it after sentence
+        # grouping meant the length limit could split the text before the
+        # dash was seen, and the boundary was lost.
+        for s, segment in enumerate(split_at_dashes(para)):
+            # the ramp is by chunk count across the whole text, so a
+            # one-line heading does not spend it
+            limits = list(first_limits[len(out):]) + [max_len]
+            for i, piece in enumerate(split_sentences(segment, limits)):
+                if not out:
+                    gap = 0
+                elif i:
+                    gap = CHUNK_GAP
+                else:
+                    gap = DASH_GAP if s else PARA_GAP
+                out.append((piece, gap))
     return out
+
+
+def split_at_dashes(para):
+    """Divide a paragraph at long dashes, so each becomes a chunk boundary
+    carrying real silence.
+
+    The dash is dropped and a comma left in its place, so the voice has a
+    comma's prosody and the read-along drawer never shows a bare "—". Sides
+    shorter than DASH_MIN_SIDE are left joined: a hard boundary there would
+    spend a synthesis call on a couple of words.
+    """
+    parts = [p.strip() for p in DASH_SPLIT.split(para)]
+    if len(parts) == 1:
+        return [para]
+    if any(len(p) < DASH_MIN_SIDE for p in parts):
+        return [DASH_SPLIT.sub(", ", para)]
+    ends = (",", ".", "!", "?", ";", ":")
+    return [p if p.endswith(ends) else p + "," for p in parts[:-1]] + [parts[-1]]
+
+
+# Long dashes: espeak gives an em dash about as much silence as a comma, and
+# an en dash or spaced hyphen less than that, so a dash reads as no pause at
+# all. The dash becomes a comma for prosody AND a chunk boundary carrying
+# real silence — but only when both sides are substantial, so "yes — no —
+# maybe" is not chopped into three synthesis calls.
+DASH_SPLIT = re.compile(r"\s+(?:[\u2014\u2013]|--?)\s+")
+DASH_MIN_SIDE = 20
+
+# Dotted names. espeak passes "." through as a phrase break and never says
+# it: "daemon.log" phonemises to dˈiːmən.lˈɔɡ ("demon, log") and, worse,
+# "3.5" to θɹˈiː.fˈaɪv ("three, five"). Spelling it out gives dˈiːmən dˈɑːt
+# lˈɔɡ and θɹˈiː pˈɔɪnt fˈaɪv.
+_DOTTED = re.compile(r"\b[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+\b")
+_CALL = re.compile(r"(?<=[A-Za-z0-9_])\(\s*\)")
+
+
+def _expand_dotted(m):
+    parts = m.group(0).split(".")
+    # "e.g", "i.e", "U.S", "a.m": single *letters*. espeak already handles
+    # these and "e dot g" would be worse. Digits are not exempt: "3.5" and
+    # "1.2.3" are exactly the cases that need a spoken "point".
+    if all(len(p) <= 1 and p.isalpha() for p in parts):
+        return m.group(0)
+    out = [parts[0]]
+    for prev, part in zip(parts, parts[1:]):
+        # a dot between digits is a decimal point, not a separator
+        joiner = "point" if prev[-1:].isdigit() and part[:1].isdigit() else "dot"
+        out.append(joiner)
+        out.append(part)
+    return " ".join(out)
+
+
+def speech_text(text):
+    """Rewrite text so it is *said* the way it is read on screen.
+
+    Applies to every path — a selection, the clipboard, an agent reply, the
+    CLI — because it lives here rather than in the agent-reply cleaner.
+    Cheap by design: pure regex over the whole utterance once, measured at
+    well under a millisecond. Nothing per-word, and nothing per-chunk.
+    """
+    text = _DOTTED.sub(_expand_dotted, text)
+    text = _CALL.sub(" function", text)      # phonemize() -> phonemize function
+    return text
 
 
 FADE = int(0.015 * SR)      # 15ms edge fade per chunk: kills boundary clicks
 CHUNK_GAP = int(0.12 * SR)  # between sentences
+DASH_GAP = int(0.20 * SR)   # at a long dash: longer than a comma, short of a stop
 PARA_GAP = int(0.42 * SR)   # after a heading, paragraph or block
 
 
@@ -322,7 +392,7 @@ def build_timeline(chunk_text, start_sample, n_samples, lead_gap, lang="en-us"):
 
 def synth_worker(gen, text, voice, speed, lang):
     global buffer, buf_len, synth_done, chunks_done
-    chunks = split_chunks(text)
+    chunks = split_chunks(speech_text(text))
     with lock:
         plan["chars"] = [len(c) for c, _ in chunks]   # what the gate has to plan for
     for chunk, gap in chunks:

@@ -57,7 +57,7 @@ def speak_identifier(name):
     Applied only inside code spans, so ordinary prose is untouched.
     """
     name = re.sub(r"[;,]\s*$", "", name.strip())
-    name = re.sub(r"\(\s*\)$", "", name)
+    # "()" is left for the daemon, which says "function"
     name = name.replace("::", " ").replace("_", " ").replace("/", " slash ")
     name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
     return re.sub(r"\s+", " ", name).strip()

@@ -215,16 +215,24 @@ Markdown is converted for the ear rather than stripped:
 | Input | Read as |
 |---|---|
 | `## Heading` | its own sentence, followed by a longer pause |
+| `daemon.log` | "daemon dot log" — espeak otherwise swallows the dot and pauses |
+| `kokoro.tokenizer.phonemize()` | "kokoro dot tokenizer dot phonemize function" |
+| `3.5 million` | "three point five million", not "three, five million" |
+| A long dash — like this | a 200 ms pause, longer than a comma, short of a full stop |
 | Tables | one sentence per row — "Process: main server, Raises: 5" |
 | Short code (≤4 lines) | spoken, with identifiers made pronounceable |
 | Longer code | "Code block, 12 lines of python" |
-| `` `raiseThrottled()` `` | "raise Throttled" |
+| `` `raiseThrottled()` `` | "raise Throttled function" |
 | Bare URLs | "link to github.com" |
 | List items | a sentence each, so they do not blur together |
 
-Paragraph, heading, table and code boundaries get a 420 ms pause; sentences
-within a paragraph get 120 ms. That pacing is what makes a long document
-navigable by ear.
+Paragraph, heading, table and code boundaries get a 420 ms pause; a long
+dash gets 200 ms; sentences within a paragraph get 120 ms. That pacing is
+what makes a long document navigable by ear.
+
+The dotted-name and dash rules live in the daemon rather than the
+agent-reply cleaner, so a selection you read with `⌃⌥S`, the clipboard and
+`ktts say` all get them too — not just Claude's replies.
 
 ## TLDR providers
 
