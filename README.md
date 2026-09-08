@@ -246,10 +246,13 @@ The app talks to the daemon over its unix socket rather than shelling out
 to `ktts`, so a button press costs a socket write instead of a Python
 interpreter start.
 
-The daemon keeps the model warm (dispatch is ~40 ms; speech starts in
-~2–2.5 s with several seconds of audio already banked). Playback is a
-single in-memory sample buffer with a cursor, so pause is instant and
-rollback is seeking — no re-synthesis.
+The daemon keeps the model warm (dispatch is ~40 ms). Speech starts about
+a second after the request: the opening chunk is capped at 50 characters
+(~1 s to render, ~2.5 s of audio) and playback begins as soon as the audio
+in hand covers rendering the next chunk at the rate seen so far, with a
+margin — never waiting past 3.5 s. Playback is a single in-memory sample
+buffer with a cursor, so pause is instant and rollback is seeking — no
+re-synthesis.
 
 Audio is written to PortAudio with **blocking writes from an ordinary
 thread, deliberately not a PortAudio callback**. A Python callback has to
@@ -259,13 +262,23 @@ only while synthesis was still running, which is exactly when the audio
 sounded rough. `write()` blocks in C with the GIL released instead, so
 PortAudio's own buffer covers any stall on the Python side.
 
-Chunks are also capped small enough (~140 chars) that rendering the next
-one always finishes before the cushion in hand runs out; a larger cap meant
-one big chunk took longer to synthesize than the audio already buffered,
-which starved playback a few seconds in and then never again — the classic
-"rough at the start, then it settles" complaint. Synthesis runs on the
-performance cores (capped at 8 threads, override with `KOKORO_THREADS`) at
-roughly 3× realtime.
+Chunks ramp 50 → 90 → 140 characters, so rendering the next one always
+finishes before the cushion in hand runs out; a larger first chunk meant
+waiting for it, and a larger cap meant one big chunk took longer to
+synthesize than the audio already buffered, which starved playback a few
+seconds in — the classic "rough at the start, then it settles" complaint.
+Synthesis runs on the performance cores (capped at 8 threads, override with
+`KOKORO_THREADS`) at 1.3–2.9× realtime depending on what else the machine
+is doing.
+
+The device buffer is requested at ~470 ms rather than PortAudio's "high"
+(119 ms here). Measured while synthesising, the writer thread wakes up to
+~230 ms late — the GIL, held by the synthesiser's Python-side work, and the
+same with 4, 6 or 8 threads — so a 119 ms buffer underflowed every couple of
+seconds on long reads while the daemon's own buffer never ran dry. The cost
+is that after a pause, up to half a second of already-queued audio plays
+out. The daemon logs the buffer it actually got, the underflow count per
+utterance, and how long after the request speech began.
 
 ## Uninstall
 

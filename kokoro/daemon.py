@@ -93,9 +93,26 @@ def synth_threads():
     return max(4, min(8, cores))
 
 SR = 24000
-START_BUFFER = SR * 7 // 2  # bank 3.5s of audio before playback begins
-RESUME_BUFFER = SR * 2      # after running dry, rebuild 2s before resuming
-MIN_START = SR * 5 // 2     # ...but a finished chunk holding 2.5s is enough
+# Playback starts as soon as the audio in hand covers rendering the NEXT
+# chunk (estimated from how long the ones so far took), with a margin. The
+# cap is the most we ever wait: it was the fixed gate before, and the log
+# showed 4-13 s buffered at start on a machine rendering at 1.3-2.9x
+# realtime, which was pure waiting.
+START_CAP = SR * 7 // 2      # never wait for more than 3.5 s of audio
+START_MARGIN = 1.25          # cushion >= 1.25x the next chunk's render time
+START_FLOOR = SR // 2        # ...and never less than 0.5 s
+RESUME_BUFFER = SR * 2       # after running dry, rebuild 2 s before resuming
+
+# The device buffer must outlast the writer thread's worst wake-up. Measured
+# on an M4 Pro while synthesising: the writer wakes up to ~230 ms late (the
+# GIL, held by the synthesiser's Python-side work; the same with 4, 6 or 8
+# threads), and latency="high" bought only 119 ms of buffer. Hence one
+# underflow every couple of seconds on long reads. Requesting 0.13 s gave
+# 471 ms here; the achieved figure is checked and the request raised if a
+# device comes up short. Cost: after a pause, up to that much already-queued
+# audio still plays out.
+STREAM_LATENCY = 0.13
+STREAM_MIN_BUFFER = 0.35     # seconds actually achieved, or ask again larger
 
 ESPEAK_LIB, ESPEAK_DATA = find_espeak()
 _opts = ort.SessionOptions()
@@ -133,6 +150,8 @@ streams_open = 0            # live PortAudio streams; must be 0 to re-init
 # never wait on read-along bookkeeping.
 tl_lock = threading.Lock()
 synth_lock = threading.Lock()  # one model call at a time, see synth_worker
+# Per-utterance figures the start gate plans with. Mutated under `lock`.
+plan = {"chars": [], "rate": None, "rchars": 0, "rsecs": 0.0, "say_t0": 0.0}
 timeline = []                           # [(sample_start, word)]
 timeline_starts = []                    # sample_start only, for bisect
 
@@ -143,19 +162,33 @@ timeline_starts = []                    # sample_start only, for bisect
 # cushion, so playback reliably starved a few seconds in and then, once
 # that huge chunk landed, never starved again. That was the "rough at the
 # start, then it settles" symptom.
-def split_sentences(text, max_len, first_max_len):
+def split_sentences(text, limits):
+    """Greedy sentence grouping under a per-position length limit.
+
+    limits[i] caps chunk i; the last entry applies from then on. A short
+    opening chunk starts playback early, a medium second one keeps the
+    cushion ahead of the third, and full-size chunks follow.
+    """
     text = text.strip()
-    # If the very first sentence is long, break it at a comma so playback
-    # can start on the first clause instead of waiting for the whole sentence.
+    if not text:
+        return []
+    first_limit = limits[0]
+    rest = limits[1:] or limits
     first_sentence = re.split(r"(?<=[.!?;:])\s+", text, maxsplit=1)[0]
-    if len(first_sentence) > first_max_len:
-        m = re.match(r"(.{30,%d}?,)\s+" % first_max_len, text)
+    if len(first_sentence) > first_limit and first_limit > 30:
+        # break a long opening sentence at a comma...
+        m = re.match(r"(.{30,%d}?,)\s+" % first_limit, text)
         if m:
-            return [m.group(1)] + split_sentences(text[m.end():], max_len, max_len)
+            return [m.group(1)] + split_sentences(text[m.end():], rest)
+        # ...or, with no comma to hand, at the last word that fits, so one
+        # long unpunctuated sentence cannot hold up the start
+        cut = text.rfind(" ", 30, first_limit + 1)
+        if cut > 30:
+            return [text[:cut]] + split_sentences(text[cut + 1:], rest)
     sentences = re.split(r"(?<=[.!?;:])\s+", text)
     chunks, cur = [], ""
     for s in sentences:
-        limit = first_max_len if not chunks else max_len
+        limit = limits[min(len(chunks), len(limits) - 1)]
         if cur and len(cur) + len(s) + 1 > limit:
             chunks.append(cur)
             cur = s
@@ -166,7 +199,13 @@ def split_sentences(text, max_len, first_max_len):
     return chunks
 
 
-def split_chunks(text, max_len=140, first_max_len=100):
+# Opening chunk, then a medium one, then max_len. Measured here: 50 chars is
+# ~1 s to render (~2.7 s of audio), so speech begins about a second after
+# the request instead of after a 100-char chunk plus a 3.5 s bank.
+FIRST_LIMITS = (50, 90)
+
+
+def split_chunks(text, max_len=140, first_limits=FIRST_LIMITS):
     """Return [(chunk, lead_gap_samples)].
 
     Blank-line boundaries in the cleaned text mark headings, paragraphs and
@@ -175,17 +214,16 @@ def split_chunks(text, max_len=140, first_max_len=100):
     """
     out = []
     paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
-    first = True
     for para in paragraphs:
-        for i, piece in enumerate(
-                split_sentences(para, max_len,
-                                first_max_len if first else max_len)):
-            if first:
+        # the ramp is by chunk count across the whole text, so a one-line
+        # heading does not spend it
+        limits = list(first_limits[len(out):]) + [max_len]
+        for i, piece in enumerate(split_sentences(para, limits)):
+            if not out:
                 gap = 0
             else:
                 gap = PARA_GAP if i == 0 else CHUNK_GAP
             out.append((piece, gap))
-            first = False
     return out
 
 
@@ -245,8 +283,10 @@ def build_timeline(chunk_text, start_sample, n_samples, lead_gap):
 
 def synth_worker(gen, text, voice, speed, lang):
     global buffer, buf_len, synth_done, chunks_done
-    first = True
-    for chunk, gap in split_chunks(text):
+    chunks = split_chunks(text)
+    with lock:
+        plan["chars"] = [len(c) for c, _ in chunks]   # what the gate has to plan for
+    for chunk, gap in chunks:
         with lock:
             if generation != gen:
                 print(f"utterance replaced after {chunks_done} chunks", flush=True)
@@ -255,8 +295,10 @@ def synth_worker(gen, text, voice, speed, lang):
             with synth_lock:
                 if generation != gen:
                     return
+                t_render = time.time()
                 samples, _ = kokoro.create(
                     chunk, voice=voice, speed=speed, lang=lang)
+                t_render = time.time() - t_render
         except Exception as e:
             # never silent: a chunk that will not synthesize is the
             # difference between a full reading and a truncated one
@@ -264,7 +306,6 @@ def synth_worker(gen, text, voice, speed, lang):
             continue
         samples = smooth_edges(np.asarray(samples, dtype=np.float32))
         lead_gap = gap
-        first = False
         n = len(samples) + lead_gap
         # grow (rare): build the bigger array outside the lock
         if buf_len + n > len(buffer):
@@ -276,7 +317,7 @@ def synth_worker(gen, text, voice, speed, lang):
                 buffer = new
         # Built before taking the audio lock — this thread is the only
         # writer of buf_len, so reading it here is safe, and the regex
-        # work must not happen while the audio callback may be waiting.
+        # work must not happen while the writer may be waiting.
         entries = build_timeline(chunk, buf_len, n, lead_gap)
         with lock:
             if generation != gen:
@@ -285,13 +326,35 @@ def synth_worker(gen, text, voice, speed, lang):
                 buffer[buf_len:buf_len + lead_gap] = 0
             buffer[buf_len + lead_gap:buf_len + n] = samples
             buf_len += n
+            # Under the lock, so the gate never sees the audio without the
+            # count (it used to be incremented after the lock was released).
+            chunks_done += 1
+            plan["rchars"] += len(chunk)
+            plan["rsecs"] += t_render
+            plan["rate"] = plan["rchars"] / plan["rsecs"] if plan["rsecs"] > 0 else None
         with tl_lock:
             timeline.extend(entries)
             timeline_starts.extend(e[0] for e in entries)
-        chunks_done += 1
     with lock:
         if generation == gen:
             synth_done = True
+
+
+def start_threshold_locked():
+    """Samples that must be banked before playback may begin. Under lock.
+
+    Enough to cover rendering the next chunk at the rate seen so far, with
+    a margin; never below START_FLOOR, never above START_CAP.
+    """
+    chars, rate = plan["chars"], plan["rate"]
+    if chunks_done == 0:
+        return START_CAP                 # nothing finished yet
+    if chunks_done >= len(chars):
+        return START_FLOOR               # everything is already rendered
+    if not rate:
+        return START_CAP
+    need = int(chars[chunks_done] / rate * START_MARGIN * SR)
+    return max(START_FLOOR, min(START_CAP, need))
 
 
 def word_publisher(gen):
@@ -368,15 +431,21 @@ def open_output_stream():
             continue
         try:
             s = sd.OutputStream(samplerate=rate, channels=1, dtype="float32",
-                                blocksize=0, latency="high")
-            s.start()
+                                blocksize=0, latency=STREAM_LATENCY)
+            if s.latency < STREAM_MIN_BUFFER:
+                # this device rounded the request down; ask for more
+                s.close()
+                s = sd.OutputStream(samplerate=rate, channels=1, dtype="float32",
+                                    blocksize=0,
+                                    latency=max(STREAM_MIN_BUFFER, STREAM_LATENCY * 2))
             name = "?"
             try:
                 name = sd.query_devices(kind="output")["name"]
             except Exception:
                 pass
-            print(f"audio out: {name} at {rate} Hz", flush=True)
-            return s, rate
+            print(f"audio out: {name} at {rate} Hz, device buffer {s.latency*1000:.0f} ms",
+                  flush=True)
+            return s, rate          # opened, not started: the caller starts it
         except Exception as e:
             print(f"audio open at {rate} Hz failed: {e}", flush=True)
     return None, SR
@@ -394,21 +463,9 @@ def player_worker(gen):
     """
     global stream, playing_started, say_active, cursor, streams_open
 
-    while True:  # wait for enough audio to start on
-        with lock:
-            if generation != gen:
-                return
-            if (buf_len >= START_BUFFER
-                    or (chunks_done >= 1 and buf_len >= MIN_START)
-                    or (synth_done and buf_len > 0)):
-                break
-            if synth_done and buf_len == 0:  # synthesis produced nothing
-                say_active = False
-                playing_started = False
-                set_state("idle")
-                return
-        time.sleep(0.03)
-
+    # Open the device first, so its re-initialisation overlaps the first
+    # chunk's render instead of following it. It is not started until there
+    # is audio to feed it.
     s, rate = open_output_stream()
     if s is None:
         with lock:
@@ -418,6 +475,22 @@ def player_worker(gen):
         set_state("idle")
         print("playback aborted: no usable audio device", flush=True)
         return
+
+    while True:  # wait for enough audio to start on
+        with lock:
+            if generation != gen:
+                s.close()
+                return
+            if buf_len >= start_threshold_locked() or (synth_done and buf_len > 0):
+                break
+            if synth_done and buf_len == 0:  # synthesis produced nothing
+                say_active = False
+                playing_started = False
+                set_state("idle")
+                s.close()
+                return
+        time.sleep(0.03)
+
     with lock:
         streams_open += 1
         if generation != gen:
@@ -427,9 +500,13 @@ def player_worker(gen):
         stream = s
         playing_started = True
         buffered = buf_len / SR
-    print(f"playback started with {buffered:.1f}s buffered", flush=True)
-    set_state("playing")
-
+        first_chars = plan["chars"][0] if plan["chars"] else 0
+        rate_chars = plan["rate"] or 0.0
+        since_say = time.time() - plan["say_t0"] if plan["say_t0"] else 0.0
+    s.start()
+    print(f"playback started {since_say:.2f}s after the request with {buffered:.1f}s "
+          f"buffered (first chunk {first_chars} chars, rendering {rate_chars:.0f} chars/s)",
+          flush=True)
     silence = np.zeros(BLOCK, dtype=np.float32)
     starved = False
     underflows = 0   # PortAudio ran dry mid-write
@@ -508,6 +585,7 @@ def stop_playback():
         chunks_done = 0
         synth_done = True
         paused = False
+        plan.update(chars=[], rate=None, rchars=0, rsecs=0.0, say_t0=0.0)
         say_active = False
         playing_started = False
     if old_stream is not None:
@@ -531,6 +609,7 @@ def handle(req):
             gen = generation
             say_active = True
             synth_done = False
+            plan["say_t0"] = time.time()
         set_state("synthesizing")
         threading.Thread(
             target=synth_worker,
