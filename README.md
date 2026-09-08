@@ -190,8 +190,11 @@ words — that halved it (1.3 s → 0.7 s, byte-identical output). Holding the
 key also warms the models and pre-builds the cache for the frontmost app,
 so the first dictation after a break pays no compilation. Dictations under
 four words skip cleanup and paste as transcribed
-(`dictation_cleanup_min_words`). Speculative decoding with a 0.6B draft was
-measured and made no difference on this hardware, so it is not used.
+(`dictation_cleanup_min_words`). Two things were measured and rejected:
+speculative decoding with a 0.6B draft made no difference on this hardware,
+and Qwen3 1.7B as a "fast" cleanup model was only ~150 ms quicker and
+returned transcripts essentially unedited — fillers kept, "Tuesday, no wait
+Wednesday" left as said — so the 4B stays.
 
 **Memory.** The two models hold about 3 GB while loaded. They load when you
 first hold the key (the app warms them as you start speaking, so the load
