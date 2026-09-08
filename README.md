@@ -183,6 +183,16 @@ transcript. **Clear recent dictations** forgets them.
 wrong go in `kokoro/dictionary.txt`, one per line (**Dictation → Edit
 dictionary…**). The cleanup model is told to spell them exactly.
 
+**Speed.** Release to text is about a second on an M4 Pro: ~140 ms of
+transcription and ~0.7 s of cleanup. The cleanup's fixed instructions are
+KV-cached once per app you paste into, so each request processes only your
+words — that halved it (1.3 s → 0.7 s, byte-identical output). Holding the
+key also warms the models and pre-builds the cache for the frontmost app,
+so the first dictation after a break pays no compilation. Dictations under
+four words skip cleanup and paste as transcribed
+(`dictation_cleanup_min_words`). Speculative decoding with a 0.6B draft was
+measured and made no difference on this hardware, so it is not used.
+
 **Memory.** The two models hold about 3 GB while loaded. They load when you
 first hold the key (the app warms them as you start speaking, so the load
 overlaps with the talking) and unload after ten idle minutes, or now via

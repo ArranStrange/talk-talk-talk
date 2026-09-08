@@ -34,6 +34,7 @@ VAD_PATH = os.path.join(HERE, "silero_vad.onnx")
 DEFAULT_STT = "mlx-community/parakeet-tdt-0.6b-v3"
 DEFAULT_CLEANUP = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 DEFAULT_IDLE_MINUTES = 10
+DEFAULT_CLEANUP_MIN_WORDS = 4     # shorter than this is pasted as transcribed
 SR = 16000
 
 
@@ -279,7 +280,10 @@ class Engine:
             return {"ok": False, "msg": "nothing was said"}
 
         text = raw
-        if cleanup and self.llm is not None:
+        # A one- or two-word dictation ("yes please", "on it") has nothing to
+        # clean and should paste instantly rather than wait for the model.
+        min_words = int(_config().get("dictation_cleanup_min_words") or DEFAULT_CLEANUP_MIN_WORDS)
+        if cleanup and self.llm is not None and len(raw.split()) >= min_words:
             t = time.time()
             cleaned = self._cleanup(raw, context)
             timings["cleanup"] = int((time.time() - t) * 1000)
