@@ -174,8 +174,8 @@ final class PillController: NSObject, NSWindowDelegate {
     /// for a missed event, so it runs slowly.
     private func startWordPoll() {
         guard wordTimer == nil else { return }
-        wordTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.wordFileChanged()
+        wordTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.wordFileChanged()      // 100 ms: a missed event costs less than half a word
         }
         wordFileChanged()
     }

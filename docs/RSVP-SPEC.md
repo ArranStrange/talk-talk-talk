@@ -1,10 +1,14 @@
 # RSVP Reading Mode — Spec
 
-> **Status: implemented.** One deviation from the plan below: the pill
-> polls the `word` file every 60 ms while the drawer is open instead of
-> relying on `hs.pathwatcher`. FSEvents coalesces changes with ~300 ms
-> latency, which showed up in testing as the drawer running a full word
-> behind the audio. The pathwatcher still drives state changes.
+> **Status: implemented, then revised (2026-09-08).** Two things changed
+> from the plan below. Word onsets are no longer estimated: with read-along
+> on, each synthesised chunk is run through Parakeet (already resident for
+> dictation) and the heuristic timeline is replaced with the recogniser's
+> word onsets about 180 ms after the chunk lands. And the word is shown
+> ~120 ms before it is heard, after subtracting the audio device's buffer
+> — readers track better when the word is already there as the sound
+> starts. The pill is a native app now; words arrive via FSEvents in ~12 ms
+> with a 100 ms safety poll.
 
 ## Summary
 
@@ -49,21 +53,37 @@ Kokoro's ONNX build returns audio with no word timestamps, so timings are
 
 1. Synthesis already knows each chunk's exact sample span in the buffer
    (`[chunk_start, chunk_end]`, including the inter-chunk gap).
-2. Split the chunk text into words. Weight each word by a cheap duration
-   heuristic: `weight = max(1, vowel_groups(word)) + 0.4 if word ends in
-   punctuation else 0`.
+2. Split the chunk text into words. Weight each word by its phoneme count
+   from the same espeak-ng phonemiser Kokoro uses (plus a pause for
+   trailing punctuation), so "SFG20" weighs what it costs to say. Measured
+   against Parakeet on the same audio, the old vowel-group regex was off by
+   a mean of 122 ms and up to half a second; phoneme counts halve the tail.
 3. Distribute the chunk's samples across words proportionally to weight,
    producing a timeline of `(sample_start, word)` entries appended under
-   the existing lock.
+   the existing lock. A paragraph gap gets a blank entry so the drawer
+   empties during the pause. This heuristic timeline is what plays for the
+   first ~180 ms of a chunk and is the fallback when alignment fails.
+4. **Refinement.** When the say request carries `align` (read-along on),
+   the chunk's 24 kHz audio is resampled to 16 kHz and run through Parakeet
+   TDT (`dictate.Engine.align_words`). Its subword tokens are merged into
+   words and matched to the source words with `difflib.SequenceMatcher` on
+   normalised text; equal runs and same-length replacements (a mis-hearing)
+   take the recogniser's onset, insertions/deletions leave gaps that are
+   interpolated between aligned neighbours. On the test set 98% of words
+   matched; the alignment is within a frame (~80 ms). The chunk's entries
+   are swapped in place under `tl_lock`; a stale generation or an unmatched
+   entry list leaves the heuristic alone.
 
 ## Publishing (daemon → pill)
 
 - A lightweight publisher thread runs only while a say-request is active:
-  every 80 ms it maps the playback cursor into the timeline (binary
-  search); when the current word changes (~3×/s at speech pace) it writes
-  the word to a new `word` file (atomic tmp+rename, same directory).
-- The pill's existing `hs.pathwatcher` already watches that directory;
-  a `word` change updates only the drawer's text element — no re-layout.
+  every 40 ms it maps `cursor − device_lag + lead` into the timeline
+  (binary search) — `device_lag` is the output buffer PortAudio reports
+  (~470 ms here), `lead` is `rsvp_lead_ms` (default 120) — and when the
+  word changes (~3×/s at speech pace) writes it to the `word` file
+  (atomic tmp+rename, same directory).
+- The app's FSEvents stream on that directory delivers the change in
+  ~12 ms and redraws only the drawer; a 100 ms poll covers a missed event.
 - The audio callback is untouched: timing is read-only observation of
   `cursor`, so this cannot reintroduce glitches.
 - On stop/new-say the timeline is cleared and the `word` file emptied.

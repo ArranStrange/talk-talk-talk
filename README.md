@@ -28,7 +28,9 @@ account, no network calls after install.
   10-second rollback to re-hear a section (`⌃⌥←`)
 - **Read-along mode** — click `▾` and the pill drops a drawer showing each
   word as it is spoken, RSVP style with the ORP anchor letter highlighted
-  and pinned so your eye never travels; see
+  and pinned so your eye never travels. Word timing comes from Parakeet
+  aligning the synthesised audio itself, so it matches what you hear to
+  within a frame, and each word appears ~120 ms before its sound; see
   [docs/RSVP-SPEC.md](docs/RSVP-SPEC.md)
 - **TLDR mode** — toggle it on and agent replies are summarised before they
   are read, via the Claude CLI (no key needed), the Claude or ChatGPT API

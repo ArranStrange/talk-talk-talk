@@ -128,8 +128,11 @@ enum Daemon {
 
     static func say(_ text: String) {
         let cfg = Config()
+        // "align": with read-along on, the daemon refines word timing from
+        // the synthesised audio (Parakeet) instead of estimating it.
         send(["cmd": "say", "text": text, "voice": cfg.voice,
-              "speed": cfg.speed, "lang": cfg.lang])
+              "speed": cfg.speed, "lang": cfg.lang,
+              "align": Prefs.readAlong])
     }
 
     static func back(_ seconds: Double = 10) {

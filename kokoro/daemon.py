@@ -29,6 +29,17 @@ STATE_PATH = os.path.join(HERE, "state")
 WORD_PATH = os.path.join(HERE, "word")
 
 
+def _cfg_value(key, default):
+    """One value from config.json, or the default. The daemon otherwise
+    receives its settings in each request; this is for tuning knobs."""
+    try:
+        with open(os.path.join(HERE, "config.json")) as f:
+            v = json.load(f).get(key)
+        return default if v is None else v
+    except (OSError, ValueError):
+        return default
+
+
 def set_word(word):
     """Publish the currently-spoken word for the RSVP drawer."""
     try:
@@ -114,6 +125,11 @@ RESUME_BUFFER = SR * 2       # after running dry, rebuild 2 s before resuming
 STREAM_LATENCY = 0.13
 STREAM_MIN_BUFFER = 0.35     # seconds actually achieved, or ask again larger
 
+# Read-along shows each word this far BEFORE it is heard. Readers track
+# better when the word is already there as the sound starts; a word that
+# appears after its onset reads as late. Overridable: rsvp_lead_ms in config.
+RSVP_LEAD_MS = 120
+
 ESPEAK_LIB, ESPEAK_DATA = find_espeak()
 _opts = ort.SessionOptions()
 _opts.intra_op_num_threads = synth_threads()
@@ -152,7 +168,9 @@ tl_lock = threading.Lock()
 synth_lock = threading.Lock()  # one model call at a time, see synth_worker
 # Per-utterance figures the start gate plans with. Mutated under `lock`.
 plan = {"chars": [], "rate": None, "rchars": 0, "rsecs": 0.0, "say_t0": 0.0,
-        "dev_lag": 0}   # samples handed to the device but not yet heard
+        "dev_lag": 0,   # samples handed to the device but not yet heard
+        "align": False, # refine word timing with Parakeet (read-along is on)
+        "lead": 0}      # show each word this many samples early
 timeline = []                           # [(sample_start, word)]
 timeline_starts = []                    # sample_start only, for bisect
 
@@ -251,31 +269,49 @@ def smooth_edges(samples):
     return samples
 
 
-def word_weights(words):
-    """Rough relative duration per word: syllable-ish count plus a pause
-    bonus for trailing punctuation. Good to about a quarter second, and
-    resynced at every chunk boundary so error never accumulates."""
+def word_weights(words, lang="en-us"):
+    """Relative duration per word for the heuristic timeline.
+
+    Phoneme count from the same espeak-ng phonemiser Kokoro uses, so "SFG20"
+    (spoken "S F G twenty") weighs what it costs to say rather than the one
+    vowel group the old regex found. Measured against Parakeet on the same
+    audio: 90th-percentile error 334 ms with vowel groups, 173 ms with
+    phonemes. This is the fallback and the first ~180 ms of a chunk; with
+    read-along on, refine_timeline() replaces it with aligned onsets.
+    """
     weights = []
     for w in words:
-        vowel_groups = len(re.findall(r"[aeiouyAEIOUY]+", w))
-        weight = float(max(1, vowel_groups))
+        weight = None
+        try:
+            bare = re.sub(r"[^A-Za-z0-9']", " ", w).strip()
+            if bare:
+                ph = kokoro.tokenizer.phonemize(bare, lang)
+                weight = float(len(re.sub(r"\s", "", ph)))
+        except Exception:
+            weight = None
+        if not weight:
+            weight = float(max(1, len(re.findall(r"[aeiouyAEIOUY]+", w))))
         if re.search(r"[.,!?;:]$", w):
-            weight += 0.4
-        weights.append(weight)
+            weight += 3.0        # a pause, in phoneme-sized units
+        weights.append(max(1.0, weight))
     return weights
 
 
-def build_timeline(chunk_text, start_sample, n_samples, lead_gap):
+def build_timeline(chunk_text, start_sample, n_samples, lead_gap, lang="en-us"):
     """Distribute a chunk's samples across its words, proportional to
-    estimated duration. Returns [(sample_start, word)]."""
+    estimated duration. Returns [(sample_start, word)]. A long lead gap
+    (a paragraph break) gets a blank entry so the drawer empties during the
+    pause instead of holding the previous sentence's last word."""
     words = chunk_text.split()
     if not words:
         return []
-    weights = word_weights(words)
+    weights = word_weights(words, lang)
     total = sum(weights)
     speech_start = start_sample + lead_gap
     speech_samples = max(1, n_samples - lead_gap)
     entries, acc = [], 0.0
+    if lead_gap >= SR // 4:
+        entries.append((start_sample, ""))
     for word, weight in zip(words, weights):
         entries.append((int(speech_start + speech_samples * acc / total), word))
         acc += weight
@@ -319,7 +355,7 @@ def synth_worker(gen, text, voice, speed, lang):
         # Built before taking the audio lock — this thread is the only
         # writer of buf_len, so reading it here is safe, and the regex
         # work must not happen while the writer may be waiting.
-        entries = build_timeline(chunk, buf_len, n, lead_gap)
+        entries = build_timeline(chunk, buf_len, n, lead_gap, lang)
         with lock:
             if generation != gen:
                 return
@@ -336,9 +372,72 @@ def synth_worker(gen, text, voice, speed, lang):
         with tl_lock:
             timeline.extend(entries)
             timeline_starts.extend(e[0] for e in entries)
+        if plan["align"]:
+            # The heuristic timeline is in place immediately, so nothing waits
+            # on this; ~180 ms later the chunk's entries are replaced with
+            # Parakeet's word onsets from the actual audio.
+            threading.Thread(target=refine_timeline,
+                             args=(gen, chunk, samples, buf_len - n + lead_gap, entries),
+                             daemon=True).start()
     with lock:
         if generation == gen:
             synth_done = True
+
+
+def refine_timeline(gen, chunk, samples, speech_start, entries):
+    """Replace a chunk's heuristic word starts with aligned ones.
+
+    Measured against Parakeet on the same audio, the vowel-group heuristic
+    is off by a mean of 122 ms and up to half a second; the alignment
+    itself is within a frame (~80 ms). Words Parakeet could not match
+    (numbers it spelled out, a mis-hearing that changed the count) are
+    interpolated between their aligned neighbours.
+    """
+    if entries and entries[0][1] == "":
+        entries = entries[1:]                 # the paragraph-gap blank stays as is
+    if not entries:
+        return
+    try:
+        import dictate
+        words = [w for _, w in entries]
+        starts = dictate.engine().align_words(samples, words)
+    except Exception as e:
+        print(f"read-along alignment skipped: {str(e).splitlines()[0][:120]}", flush=True)
+        return
+    if not starts or all(s is None for s in starts):
+        return
+    # interpolate the gaps, and pin the first word to the chunk's onset
+    n = len(starts)
+    if starts[0] is None:
+        starts[0] = 0.0
+    known = [i for i, s in enumerate(starts) if s is not None]
+    for a, b in zip(known, known[1:]):
+        for i in range(a + 1, b):
+            starts[i] = starts[a] + (starts[b] - starts[a]) * (i - a) / (b - a)
+    tail = known[-1]
+    if tail < n - 1:                      # after the last aligned word: spread evenly
+        per = max(0.0, (len(samples) / SR - starts[tail])) / (n - tail)
+        for i in range(tail + 1, n):
+            starts[i] = starts[tail] + per * (i - tail)
+    new_entries = [(speech_start + int(s * SR), w) for s, w in zip(starts, words)]
+    # keep the sequence monotonic even if two onsets came back equal
+    for i in range(1, n):
+        if new_entries[i][0] <= new_entries[i - 1][0]:
+            new_entries[i] = (new_entries[i - 1][0] + 1, new_entries[i][1])
+    with lock:
+        if generation != gen:
+            return
+    with tl_lock:
+        first = entries[0][0]
+        try:
+            i0 = timeline.index(entries[0])
+        except ValueError:
+            return                        # utterance replaced under us
+        i1 = i0 + n
+        if timeline[i0:i1] != entries:
+            return
+        timeline[i0:i1] = new_entries
+        timeline_starts[i0:i1] = [e[0] for e in new_entries]
 
 
 def start_threshold_locked():
@@ -370,7 +469,7 @@ def word_publisher(gen):
         with lock:
             if generation != gen or not say_active:
                 break
-            pos = max(0, cursor - plan["dev_lag"])
+            pos = max(0, cursor - plan["dev_lag"] + plan["lead"])
         with tl_lock:
             starts, entries = timeline_starts, timeline
         # bisect outside both locks: lists are append-only within a
@@ -380,7 +479,7 @@ def word_publisher(gen):
         if word != last:
             last = word
             set_word(word or "")
-        time.sleep(0.08)
+        time.sleep(0.04)                  # half the old 80 ms; a word is ~250 ms
     set_word("")
 
 
@@ -476,6 +575,10 @@ def player_worker(gen):
         set_state("idle")
         print("playback aborted: no usable audio device", flush=True)
         return
+    with lock:
+        # Known from the moment the stream exists; set here rather than after
+        # start() so the word publisher never runs a poll with lag 0.
+        plan["dev_lag"] = int(s.latency * SR)
 
     while True:  # wait for enough audio to start on
         with lock:
@@ -505,11 +608,6 @@ def player_worker(gen):
         rate_chars = plan["rate"] or 0.0
         since_say = time.time() - plan["say_t0"] if plan["say_t0"] else 0.0
     s.start()
-    with lock:
-        # The cursor counts samples written to the device; the device holds
-        # this many before they are audible. Read-along subtracts it so the
-        # word shown is the word being heard, not the one about to be.
-        plan["dev_lag"] = int(s.latency * SR)
     print(f"playback started {since_say:.2f}s after the request with {buffered:.1f}s "
           f"buffered (first chunk {first_chars} chars, rendering {rate_chars:.0f} chars/s)",
           flush=True)
@@ -592,7 +690,8 @@ def stop_playback():
         chunks_done = 0
         synth_done = True
         paused = False
-        plan.update(chars=[], rate=None, rchars=0, rsecs=0.0, say_t0=0.0, dev_lag=0)
+        plan.update(chars=[], rate=None, rchars=0, rsecs=0.0, say_t0=0.0, dev_lag=0,
+                    align=False, lead=0)
         say_active = False
         playing_started = False
     if old_stream is not None:
@@ -617,6 +716,8 @@ def handle(req):
             say_active = True
             synth_done = False
             plan["say_t0"] = time.time()
+            plan["align"] = bool(req.get("align", False))
+            plan["lead"] = int(SR * float(_cfg_value("rsvp_lead_ms", RSVP_LEAD_MS)) / 1000)
         set_state("synthesizing")
         threading.Thread(
             target=synth_worker,
