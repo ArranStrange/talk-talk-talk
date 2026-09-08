@@ -368,20 +368,69 @@ def synth_worker(gen, text, voice, speed, lang):
             chunks_done += 1
             plan["rchars"] += len(chunk)
             plan["rsecs"] += t_render
-            plan["rate"] = plan["rchars"] / plan["rsecs"] if plan["rsecs"] > 0 else None
+            # Per-call overhead swamps a tiny chunk (a heading), so its
+            # rate would say the machine is slow and the gate would wait
+            # for the cap. Only trust the rate once 25 chars have rendered.
+            plan["rate"] = (plan["rchars"] / plan["rsecs"]
+                            if plan["rsecs"] > 0 and plan["rchars"] >= 25 else None)
         with tl_lock:
             timeline.extend(entries)
             timeline_starts.extend(e[0] for e in entries)
         if plan["align"]:
             # The heuristic timeline is in place immediately, so nothing waits
-            # on this; ~180 ms later the chunk's entries are replaced with
-            # Parakeet's word onsets from the actual audio.
-            threading.Thread(target=refine_timeline,
-                             args=(gen, chunk, samples, buf_len - n + lead_gap, entries),
-                             daemon=True).start()
+            # on this. The alignment worker refines it when playback can
+            # afford the competition — see align_worker().
+            align_queue.append((gen, chunk, samples, buf_len - n + lead_gap, entries))
     with lock:
         if generation == gen:
             synth_done = True
+
+
+# Alignment must not compete with synthesis while playback is tight: measured
+# with alignment running alongside, Kokoro dropped below realtime and the
+# buffer ran dry ("only reads one sentence, then freezes"). One worker, and
+# it waits until the audio in hand comfortably exceeds what an alignment
+# pass costs, or synthesis is finished.
+align_queue = []
+ALIGN_MIN_CUSHION = SR * 3        # 3 s banked before aligning while synthesising
+
+
+def align_worker():
+    import dictate
+    while True:
+        if not align_queue:
+            time.sleep(0.05)
+            continue
+        with lock:
+            cushion = buf_len - cursor
+            done = synth_done
+            gen_now = generation
+        job = align_queue[0]
+        if job[0] != gen_now:
+            align_queue.pop(0)             # stale utterance
+            continue
+        if not done and cushion < ALIGN_MIN_CUSHION:
+            time.sleep(0.05)
+            continue
+        eng = dictate.engine()
+        if not eng.transcriber_loaded:
+            # Loading is heavy (2-3 s of disk and CPU). Never do it under a
+            # live synthesis: this chunk keeps its heuristic timing. Once
+            # synthesis is finished, load so the next utterance has it.
+            if done:
+                try:
+                    eng.warm(need_llm=False)
+                except Exception as e:
+                    print(f"read-along: aligner load failed: {str(e)[:120]}", flush=True)
+                align_queue.clear()
+            else:
+                align_queue.pop(0)        # drop this one; later chunks re-check
+            continue
+        align_queue.pop(0)
+        refine_timeline(*job)
+
+
+threading.Thread(target=align_worker, daemon=True).start()
 
 
 def refine_timeline(gen, chunk, samples, speech_start, entries):
@@ -400,7 +449,7 @@ def refine_timeline(gen, chunk, samples, speech_start, entries):
     try:
         import dictate
         words = [w for _, w in entries]
-        starts = dictate.engine().align_words(samples, words)
+        starts = dictate.engine().align_words(samples, words, load=False)
     except Exception as e:
         print(f"read-along alignment skipped: {str(e).splitlines()[0][:120]}", flush=True)
         return
@@ -692,6 +741,7 @@ def stop_playback():
         paused = False
         plan.update(chars=[], rate=None, rchars=0, rsecs=0.0, say_t0=0.0, dev_lag=0,
                     align=False, lead=0)
+        align_queue.clear()
         say_active = False
         playing_started = False
     if old_stream is not None:
@@ -776,6 +826,11 @@ def handle(req):
                          kwargs={"context": str(req.get("context") or "")},
                          daemon=True).start()
         return {"ok": True, "msg": "warming"}
+    if cmd == "align_warm":
+        import dictate
+        threading.Thread(target=dictate.engine().warm, kwargs={"need_llm": False},
+                         daemon=True).start()
+        return {"ok": True, "msg": "warming aligner"}
     if cmd == "dictation_unload":
         import dictate
         return {"ok": True, "msg": "unloaded" if dictate.engine().unload() else "not loaded"}

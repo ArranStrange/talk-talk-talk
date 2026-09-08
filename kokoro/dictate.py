@@ -227,6 +227,10 @@ class Engine:
         ids, cache = hit
         return ids, copy.deepcopy(cache)   # generation mutates the cache
 
+    @property
+    def transcriber_loaded(self):
+        return self.stt is not None
+
     def unload(self):
         with self.lock:
             had = self.stt is not None or self.llm is not None
@@ -420,7 +424,7 @@ class Engine:
     def _norm_word(w):
         return re.sub(r"[^a-z0-9]", "", w.lower())
 
-    def align_words(self, samples_24k, words):
+    def align_words(self, samples_24k, words, load=True):
         """Start time in seconds of each source word within a synthesised
         chunk, from Parakeet's token timestamps; None where the recognised
         sequence could not be matched to the source (numbers spelled out,
@@ -431,7 +435,8 @@ class Engine:
         import difflib
         import mlx.core as mx
         from parakeet_mlx.audio import get_logmel
-        self.warm(need_llm=False)
+        if load:
+            self.warm(need_llm=False)
         if self.stt is None or not words:
             return None
         n = int(round(len(samples_24k) * SR / 24000))

@@ -41,6 +41,7 @@ final class Coordinator {
         bindHotkeys()
         refresh()
         dictation.start()
+        if Prefs.readAlong { Daemon.command("align_warm", boot: false) }
 
         Log.write("started: hotkeys=\(Hotkeys.shared.count)/7 "
                   + "accessibility=\(Selection.isTrusted) "
@@ -277,6 +278,9 @@ final class Coordinator {
         Prefs.readAlong.toggle()
         Hud.shared.show(Prefs.readAlong ? "Read-along: ON" : "Read-along: OFF")
         refresh()
+        // Load the aligner now, while nothing is being synthesised. Loading
+        // it during speech slowed synthesis below realtime.
+        if Prefs.readAlong { Daemon.command("align_warm") }
     }
 
     func bringPillToFront() {
