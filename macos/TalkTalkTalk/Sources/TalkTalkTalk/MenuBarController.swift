@@ -204,6 +204,31 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             Daemon.command("dictation_unload", boot: false)
             Hud.shared.show("Dictation models unloaded")
         }
+
+        // Recent dictations: click one to put it back on the clipboard, for
+        // when the paste went to the wrong window or you want it again.
+        dictMenu.addItem(.separator())
+        let recent = Prefs.recentDictations
+        if recent.isEmpty {
+            add(dictMenu, "No recent dictations", enabled: false)
+        } else {
+            add(dictMenu, "Recent — click to copy", enabled: false)
+            for entry in recent {
+                let item = add(dictMenu, MenuBarController.oneLine(entry.text)) {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(entry.text, forType: .string)
+                    Hud.shared.show("Copied", seconds: 1)
+                }
+                var tip = entry.text
+                if let raw = entry.raw { tip += "\n\nBefore cleanup:\n" + raw }
+                item.toolTip = tip
+            }
+            add(dictMenu, "Clear recent dictations") {
+                Prefs.clearRecentDictations()
+                Hud.shared.show("Recent dictations cleared", seconds: 1)
+            }
+        }
         addSubmenu(menu, "Dictation", dictMenu)
 
         // 7. voice
@@ -348,6 +373,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     // MARK: helpers
+
+    /// A menu-sized preview: one line, whitespace collapsed, cut at 60.
+    static func oneLine(_ text: String, limit: Int = 60) -> String {
+        let flat = text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return flat.count <= limit ? flat : String(flat.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…"
+    }
 
     private func trim(_ d: Double) -> String {
         d == d.rounded() ? String(Int(d)) : String(format: "%g", d)

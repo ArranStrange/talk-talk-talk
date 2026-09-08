@@ -173,6 +173,12 @@ It also gets told which app you are pasting into, and any spoken formatting
 ("new paragraph", "bullet point") becomes formatting. Turn it off under
 **Dictation → Clean up with Qwen** to get the raw transcript.
 
+**Recent.** The last ten dictations are listed at the bottom of the
+Dictation menu. Click one to put it back on the clipboard — for when the
+paste landed in the wrong window, or you want to say it again somewhere
+else. Hover for the full text and, where cleanup changed it, the raw
+transcript. **Clear recent dictations** forgets them.
+
 **Dictionary.** Names, products and jargon the transcriber keeps getting
 wrong go in `kokoro/dictionary.txt`, one per line (**Dictation → Edit
 dictionary…**). The cleanup model is told to spell them exactly.

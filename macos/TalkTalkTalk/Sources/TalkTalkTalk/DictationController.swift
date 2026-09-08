@@ -150,6 +150,7 @@ final class DictationController {
             Log.write("dictation: stt \(ms["stt"] ?? "?")ms cleanup \(ms["cleanup"] ?? "-")ms "
                       + "\(reply["seconds"] ?? "?")s of speech")
         }
+        Prefs.remember(text, raw: reply["raw"] as? String)
         if Config().raw["dictation_paste"] as? Bool ?? true {
             paste(text)
         } else {
