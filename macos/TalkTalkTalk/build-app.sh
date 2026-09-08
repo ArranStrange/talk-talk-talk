@@ -38,6 +38,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppleEventsUsageDescription</key>
   <string>Talk Talk Talk reads the text you have selected.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Talk Talk Talk records while you hold the dictation key, then types what you said.</string>
 </dict>
 </plist>
 PLIST

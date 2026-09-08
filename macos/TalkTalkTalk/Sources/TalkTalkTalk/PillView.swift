@@ -10,11 +10,14 @@ enum Look {
         "paused":       NSColor(srgbRed: 0.95, green: 0.85, blue: 0.20, alpha: 1),
         "ready":        NSColor(srgbRed: 0.35, green: 0.55, blue: 0.95, alpha: 1),
         "summarising":  NSColor(srgbRed: 0.62, green: 0.45, blue: 0.95, alpha: 1),
+        "listening":    NSColor(srgbRed: 0.95, green: 0.30, blue: 0.30, alpha: 1),
+        "transcribing": NSColor(srgbRed: 0.95, green: 0.60, blue: 0.10, alpha: 1),
     ]
     static let label: [String: String] = [
         "loading": "Loading model…", "synthesizing": "Preparing…",
         "playing": "Speaking", "paused": "Paused",
         "ready": "Agent replied", "summarising": "Summarising…",
+        "listening": "Listening…", "transcribing": "Transcribing…",
     ]
     static let on = NSColor(srgbRed: 0.25, green: 0.80, blue: 0.35, alpha: 0.95)
     static let off = NSColor(white: 1, alpha: 0.30)

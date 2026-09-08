@@ -10,6 +10,7 @@ final class Coordinator {
     let pill = PillController()
     let reader = ReaderController()
     let tldr = Tldr()
+    private(set) lazy var dictation = DictationController(coordinator: self)
     private var watcher: StateWatcher?
     private var fnWatcher: FnWatcher?
     private var readyTimer: Timer?
@@ -39,6 +40,7 @@ final class Coordinator {
 
         bindHotkeys()
         refresh()
+        dictation.start()
 
         Log.write("started: hotkeys=\(Hotkeys.shared.count)/7 "
                   + "accessibility=\(Selection.isTrusted) "
@@ -65,6 +67,7 @@ final class Coordinator {
                 timer.invalidate()
                 self.trustTimer = nil
                 self.fnWatcher?.start()
+                self.dictation.start()
                 Log.write("accessibility granted; dictation watcher started")
                 Hud.shared.show("Accessibility granted — everything is live")
             } else if attempts > 100 {      // ~5 minutes, then stop asking
@@ -144,6 +147,23 @@ final class Coordinator {
     }
 
     func dismissReady() { writeState("idle") }
+
+    /// Dictation writes its own states into the same file the daemon uses.
+    func dictationState(_ s: String) { writeState(s) }
+
+    /// Dictation is over: put the file back to whatever the engine is really
+    /// doing. Writing "idle" blindly would hide the pill while speech that
+    /// was merely paused for the dictation carries on underneath.
+    func dictationFinished() {
+        guard state == "listening" || state == "transcribing" else { return }
+        Daemon.request(["cmd": "status"], boot: false) { [weak self] reply in
+            guard let self, self.state == "listening" || self.state == "transcribing"
+            else { return }
+            let real = reply?["msg"] as? String ?? "idle"
+            self.writeState(["idle", "playing", "paused", "synthesizing"].contains(real)
+                            ? real : "idle")
+        }
+    }
 
     // MARK: delivery
 
@@ -287,6 +307,7 @@ final class Coordinator {
         watcher?.stop()
         fnWatcher?.stop()
         tldr.cancel()
+        dictation.stop()
         reader.close()
         pill.teardown()
         menu?.remove()

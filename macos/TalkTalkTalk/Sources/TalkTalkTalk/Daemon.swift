@@ -92,6 +92,36 @@ enum Daemon {
         }
     }
 
+    /// Send and return the parsed reply on the main queue. Reads until the
+    /// daemon closes the connection, because a transcript can exceed a
+    /// single recv. Nil means no daemon or no parseable reply.
+    static func request(_ request: [String: Any], boot: Bool = true,
+                        completion: @escaping ([String: Any]?) -> Void) {
+        queue.async {
+            func done(_ r: [String: Any]?) { DispatchQueue.main.async { completion(r) } }
+            guard let data = try? JSONSerialization.data(withJSONObject: request)
+            else { return done(nil) }
+            var fd = connectFd()
+            if fd == nil {
+                guard boot, startDaemon(), let retry = connectFd() else { return done(nil) }
+                fd = retry
+            }
+            guard let sock = fd else { return done(nil) }
+            defer { close(sock) }
+            data.withUnsafeBytes { buf in
+                _ = Darwin.send(sock, buf.baseAddress, buf.count, 0)
+            }
+            var all = Data()
+            var buf = [UInt8](repeating: 0, count: 65536)
+            while true {
+                let n = recv(sock, &buf, buf.count, 0)
+                if n <= 0 { break }
+                all.append(contentsOf: buf[0..<n])
+            }
+            done((try? JSONSerialization.jsonObject(with: all)) as? [String: Any])
+        }
+    }
+
     static func command(_ cmd: String, boot: Bool = true) {
         send(["cmd": cmd], boot: boot)
     }

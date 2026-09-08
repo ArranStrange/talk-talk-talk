@@ -46,6 +46,12 @@ account, no network calls after install.
   hold. Speed and position live in the menu bar so nothing competes with the
   word. The reader takes focus and handles its own keys, so it can never
   swallow a keystroke system-wide.
+- **Dictation** — hold Right ⌥ (or Fn, or Right ⌘) and talk; release and
+  what you said is typed where the cursor is. Speech to text is NVIDIA's
+  Parakeet, then Qwen3 removes the ums, keeps only the correction when you
+  correct yourself, applies your personal dictionary and fixes punctuation.
+  Both run on-device via MLX; nothing leaves the machine. Roughly a second
+  from release to text. See [Dictation](#dictation) below.
 - **Dictation-aware** — hold-Fn dictation tools (e.g. Wispr Flow) auto-pause
   speech while you talk and resume when you release
 - **54 voices** across 9 languages, all local — pick one from the menu bar
@@ -149,6 +155,38 @@ Japanese, and Mandarin sets — `af_heart` (default), `af_bella`, `bf_emma`,
 and `bm_george` are good starting points. See the
 [Kokoro voices list](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md).
 
+## Dictation
+
+Hold the dictation key, speak, release. The pill shows **Listening…** while
+the key is down and **Transcribing…** for the second after, then the text
+lands at the cursor via ⌘V and your previous clipboard is put back.
+
+| Stage | Model | Licence | What it does |
+|---|---|---|---|
+| Silence | [Silero VAD](https://github.com/snakers4/silero-vad) | MIT | trims the ends; an accidental tap pastes nothing |
+| Speech to text | [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) via [parakeet-mlx](https://github.com/senstella/parakeet-mlx) | CC-BY-4.0 | transcription with punctuation, 25 languages |
+| Cleanup | [Qwen3 4B Instruct](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) via [mlx-lm](https://github.com/ml-explore/mlx-lm) | Apache 2.0 | fillers out, self-corrections resolved, dictionary applied |
+
+The cleanup step is the one that makes it feel like writing rather than a
+transcript: "send it Tuesday, no, Wednesday" becomes "send it Wednesday".
+It also gets told which app you are pasting into, and any spoken formatting
+("new paragraph", "bullet point") becomes formatting. Turn it off under
+**Dictation → Clean up with Qwen** to get the raw transcript.
+
+**Dictionary.** Names, products and jargon the transcriber keeps getting
+wrong go in `kokoro/dictionary.txt`, one per line (**Dictation → Edit
+dictionary…**). The cleanup model is told to spell them exactly.
+
+**Memory.** The two models hold about 3 GB while loaded. They load when you
+first hold the key (the app warms them as you start speaking, so the load
+overlaps with the talking) and unload after ten idle minutes, or now via
+**Dictation → Unload dictation models**. Set `dictation_idle_unload_min` to
+`0` in `config.json` to keep them resident.
+
+**Key choice.** Right ⌥ by default. Fn is available if nothing else is
+using it; if you run Wispr Flow on Fn, leave this on Right ⌥ or the two
+will both fire.
+
 ## Reading structured text
 
 Markdown is converted for the ear rather than stripped:
@@ -240,4 +278,12 @@ defaults delete com.talktalktalk.app
   Apache 2.0 open-weights TTS model
 - [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) by thewh1teagle —
   ONNX runtime port and model releases
+- [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+  by NVIDIA — CC-BY-4.0 speech recognition model, run via
+  [parakeet-mlx](https://github.com/senstella/parakeet-mlx) (MIT)
+- [Qwen3](https://huggingface.co/Qwen) by Alibaba — Apache 2.0 language
+  model used for dictation cleanup, run via
+  [mlx-lm](https://github.com/ml-explore/mlx-lm) (MIT)
+- [Silero VAD](https://github.com/snakers4/silero-vad) — MIT voice activity
+  detection
 - Code in this repo: MIT license (see LICENSE)

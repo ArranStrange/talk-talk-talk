@@ -578,7 +578,39 @@ def handle(req):
 
         threading.Thread(target=_exit_soon, daemon=True).start()
         return {"ok": True, "msg": "bye"}
+    # -- dictation ---------------------------------------------------------
+    # Lives in dictate.py and loads its models on first use, so a machine
+    # that only ever uses speech pays nothing for it.
+    if cmd == "dictation_warm":
+        import dictate
+        threading.Thread(target=dictate.engine().warm, daemon=True).start()
+        return {"ok": True, "msg": "warming"}
+    if cmd == "dictation_unload":
+        import dictate
+        return {"ok": True, "msg": "unloaded" if dictate.engine().unload() else "not loaded"}
+    if cmd == "transcribe":
+        import dictate
+        path = req.get("path") or ""
+        if not os.path.isfile(path):
+            return {"ok": False, "msg": "no recording at that path"}
+        return dictate.engine().transcribe(
+            path, cleanup=bool(req.get("cleanup", True)),
+            context=str(req.get("context") or ""))
     return {"ok": False, "msg": f"unknown command: {cmd}"}
+
+
+def _serve(conn):
+    try:
+        data = conn.recv(1 << 20)
+        reply = handle(json.loads(data.decode()))
+        conn.sendall(json.dumps(reply).encode())
+    except Exception as e:
+        try:
+            conn.sendall(json.dumps({"ok": False, "msg": str(e)}).encode())
+        except OSError:
+            pass
+    finally:
+        conn.close()
 
 
 def main():
@@ -589,19 +621,12 @@ def main():
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(SOCK_PATH)
     server.listen(8)
+    # A thread per connection: transcription takes a second or so, and
+    # every command already takes the locks it needs, so a stop or pause
+    # must not queue behind it.
     while True:
         conn, _ = server.accept()
-        try:
-            data = conn.recv(1 << 20)
-            reply = handle(json.loads(data.decode()))
-            conn.sendall(json.dumps(reply).encode())
-        except Exception as e:
-            try:
-                conn.sendall(json.dumps({"ok": False, "msg": str(e)}).encode())
-            except OSError:
-                pass
-        finally:
-            conn.close()
+        threading.Thread(target=_serve, args=(conn,), daemon=True).start()
 
 
 if __name__ == "__main__":

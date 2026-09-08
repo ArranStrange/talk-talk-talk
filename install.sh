@@ -53,6 +53,9 @@ if [ ! -x "$KOKORO/venv/bin/python" ]; then
 else
   say "venv already present"
 fi
+# Dictation: Parakeet (speech to text) and Qwen (cleanup), both on MLX.
+say "Checking dictation packages (parakeet-mlx, mlx-lm)"
+"$KOKORO/venv/bin/pip" install --quiet parakeet-mlx mlx-lm
 
 # --- 5. Model weights (Apache 2.0, ~340 MB total) ------------------------------
 for f in kokoro-v1.0.onnx voices-v1.0.bin; do
@@ -63,6 +66,25 @@ for f in kokoro-v1.0.onnx voices-v1.0.bin; do
     say "$f already present"
   fi
 done
+
+# --- 5b. Dictation models -------------------------------------------------------
+# Silero VAD is 2 MB. The two MLX models are ~1.2 GB and ~2.5 GB and come
+# from Hugging Face on first use anyway; fetching them here just means the
+# first dictation is not a four-minute wait. Set TTT_SKIP_MODELS=1 to defer.
+if [ ! -f "$KOKORO/silero_vad.onnx" ]; then
+  say "Downloading Silero VAD"
+  curl -sL -o "$KOKORO/silero_vad.onnx" \
+    "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx"
+fi
+if [ -z "${TTT_SKIP_MODELS:-}" ]; then
+  say "Fetching dictation models (~3.7 GB, cached in ~/.cache/huggingface)"
+  "$KOKORO/venv/bin/python" -c '
+from huggingface_hub import snapshot_download
+for repo in ("mlx-community/parakeet-tdt-0.6b-v3", "mlx-community/Qwen3-4B-Instruct-2507-4bit"):
+    snapshot_download(repo)
+    print("  ready:", repo)
+'
+fi
 
 # --- 6. ktts on PATH ------------------------------------------------------------
 chmod +x "$KOKORO/ktts" "$KOKORO/daemon.py" "$KOKORO/speak_response.py" \
@@ -151,6 +173,9 @@ Remaining manual steps:
 
 Hotkeys: ⌃⌥S speak selection · ⌃⌥P play/pause · ⌃⌥← rewind ·
          ⌃⌥X stop · ⌃⌥A auto-read · ⌃⌥R reader · ⌃⌥T TL;DR
+Dictate: hold Right ⌥ and talk; release to paste. Change the key, or
+         turn cleanup off, under Dictation in the menu. macOS will ask
+         for microphone access the first time.
 Log:     ~/Library/Logs/TalkTalkTalk.log
 ────────────────────────────────────────────────────────────────────────
 EOF

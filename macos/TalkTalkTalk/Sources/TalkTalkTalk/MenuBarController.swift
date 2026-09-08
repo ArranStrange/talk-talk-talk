@@ -19,6 +19,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private static let glyph: [String: String] = [
         "idle": "◍", "loading": "◐", "synthesizing": "◐", "summarising": "◓",
         "playing": "◉", "paused": "◑", "ready": "◈",
+        "listening": "●", "transcribing": "◐",
     ]
     private static let colors: [String: NSColor] = [
         "idle":         NSColor(white: 0.55, alpha: 1),
@@ -28,11 +29,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         "playing":      NSColor(srgbRed: 0.20, green: 0.72, blue: 0.32, alpha: 1),
         "paused":       NSColor(srgbRed: 0.90, green: 0.75, blue: 0.10, alpha: 1),
         "ready":        NSColor(srgbRed: 0.30, green: 0.50, blue: 0.95, alpha: 1),
+        "listening":    NSColor(srgbRed: 0.95, green: 0.30, blue: 0.30, alpha: 1),
+        "transcribing": NSColor(srgbRed: 0.95, green: 0.60, blue: 0.10, alpha: 1),
     ]
     private static let stateLabel: [String: String] = [
         "idle": "Idle", "loading": "Loading model…", "synthesizing": "Preparing…",
         "playing": "Speaking", "paused": "Paused", "ready": "Reply ready",
-        "summarising": "Summarising…",
+        "summarising": "Summarising…", "listening": "Listening…",
+        "transcribing": "Transcribing…",
     ]
 
     private static let voices: [(String, [String], String)] = [
@@ -164,6 +168,44 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         addSubmenu(menu, "TL;DR options", tldrMenu(cfg))
 
+        // 6b. dictation
+        menu.addItem(.separator())
+        let dictMenu = NSMenu()
+        let keyMenu = NSMenu()
+        let currentKey = DictationController.key
+        for k in DictationController.Key.allCases {
+            add(keyMenu, k.label, checked: currentKey == k) {
+                Config.set("dictation_key", k.rawValue)
+                self.coord.dictation.restart()
+                Hud.shared.show(k == .off ? "Dictation off" : "Dictate: \(k.label)")
+            }
+        }
+        addSubmenu(dictMenu, "Dictation key (\(currentKey.label))", keyMenu)
+        add(dictMenu, "Clean up with Qwen", checked: cfg.raw["dictation_cleanup"] as? Bool ?? true) {
+            let now = !(Config().raw["dictation_cleanup"] as? Bool ?? true)
+            Config.set("dictation_cleanup", now)
+            Hud.shared.show(now ? "Cleanup on" : "Cleanup off — raw transcript")
+        }
+        add(dictMenu, "Paste result (else copy)", checked: cfg.raw["dictation_paste"] as? Bool ?? true) {
+            let now = !(Config().raw["dictation_paste"] as? Bool ?? true)
+            Config.set("dictation_paste", now)
+        }
+        add(dictMenu, "Edit dictionary…") {
+            let p = Paths.kokoroDir + "/dictionary.txt"
+            if !FileManager.default.fileExists(atPath: p) {
+                Paths.write("# One term per line. The cleanup model spells these exactly.\n"
+                            + "# Names, products, jargon — anything it keeps getting wrong.\n",
+                            to: p)
+            }
+            NSWorkspace.shared.open(URL(fileURLWithPath: p))
+        }
+        dictMenu.addItem(.separator())
+        add(dictMenu, "Unload dictation models now") {
+            Daemon.command("dictation_unload", boot: false)
+            Hud.shared.show("Dictation models unloaded")
+        }
+        addSubmenu(menu, "Dictation", dictMenu)
+
         // 7. voice
         menu.addItem(.separator())
         let voiceMenu = NSMenu()
@@ -202,6 +244,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             ⌃⌥X cancel / dismiss / stop
             ⌃⌥A auto-read on/off
             ⌃⌥T TLDR on/off (applies to both)
+            \(DictationController.key.label) to dictate
                in the reader: hold R to read · ↑↓ speed
                ←→ step a word · esc close
             """, seconds: 6)

@@ -14,3 +14,9 @@ kokoro/__pycache__/
 # Swift build output
 macos/TalkTalkTalk/.build/
 macos/TalkTalkTalk/build/
+
+# Dictation assets fetched by install.sh, and per-user files
+kokoro/silero_vad.onnx
+kokoro/dictation.wav
+kokoro/dictation.wav.trim.wav
+kokoro/dictionary.txt
