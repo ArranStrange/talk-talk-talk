@@ -507,6 +507,7 @@ def player_worker(gen):
     print(f"playback started {since_say:.2f}s after the request with {buffered:.1f}s "
           f"buffered (first chunk {first_chars} chars, rendering {rate_chars:.0f} chars/s)",
           flush=True)
+    set_state("playing")
     silence = np.zeros(BLOCK, dtype=np.float32)
     starved = False
     underflows = 0   # PortAudio ran dry mid-write
