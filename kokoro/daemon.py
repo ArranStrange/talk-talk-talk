@@ -151,7 +151,8 @@ streams_open = 0            # live PortAudio streams; must be 0 to re-init
 tl_lock = threading.Lock()
 synth_lock = threading.Lock()  # one model call at a time, see synth_worker
 # Per-utterance figures the start gate plans with. Mutated under `lock`.
-plan = {"chars": [], "rate": None, "rchars": 0, "rsecs": 0.0, "say_t0": 0.0}
+plan = {"chars": [], "rate": None, "rchars": 0, "rsecs": 0.0, "say_t0": 0.0,
+        "dev_lag": 0}   # samples handed to the device but not yet heard
 timeline = []                           # [(sample_start, word)]
 timeline_starts = []                    # sample_start only, for bisect
 
@@ -369,7 +370,7 @@ def word_publisher(gen):
         with lock:
             if generation != gen or not say_active:
                 break
-            pos = cursor
+            pos = max(0, cursor - plan["dev_lag"])
         with tl_lock:
             starts, entries = timeline_starts, timeline
         # bisect outside both locks: lists are append-only within a
@@ -504,6 +505,11 @@ def player_worker(gen):
         rate_chars = plan["rate"] or 0.0
         since_say = time.time() - plan["say_t0"] if plan["say_t0"] else 0.0
     s.start()
+    with lock:
+        # The cursor counts samples written to the device; the device holds
+        # this many before they are audible. Read-along subtracts it so the
+        # word shown is the word being heard, not the one about to be.
+        plan["dev_lag"] = int(s.latency * SR)
     print(f"playback started {since_say:.2f}s after the request with {buffered:.1f}s "
           f"buffered (first chunk {first_chars} chars, rendering {rate_chars:.0f} chars/s)",
           flush=True)
@@ -586,7 +592,7 @@ def stop_playback():
         chunks_done = 0
         synth_done = True
         paused = False
-        plan.update(chars=[], rate=None, rchars=0, rsecs=0.0, say_t0=0.0)
+        plan.update(chars=[], rate=None, rchars=0, rsecs=0.0, say_t0=0.0, dev_lag=0)
         say_active = False
         playing_started = False
     if old_stream is not None:
