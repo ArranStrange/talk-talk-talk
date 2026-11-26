@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ktts — Talk Talk Talk client (controls the resident Kokoro daemon)
+"""ktts — Bellow Flo client (controls the resident Kokoro daemon)
 
   ktts say "text"      speak the given text (replaces anything currently playing)
   ktts say -           speak text from stdin

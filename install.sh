@@ -1,17 +1,17 @@
 #!/bin/bash
-# Talk Talk Talk installer — macOS only.
+# Bellow Flo installer — macOS only.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
 KOKORO="$REPO/kokoro"
 MODEL_BASE="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
-APPDIR="$HOME/Applications/Talk Talk Talk.app"
-BUNDLE_ID="com.talktalktalk.app"
+APPDIR="$HOME/Applications/Bellow Flo.app"
+BUNDLE_ID="com.bellowflo.app"
 
 say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname)" = "Darwin" ] || die "Talk Talk Talk is macOS-only."
+[ "$(uname)" = "Darwin" ] || die "Bellow Flo is macOS-only."
 command -v brew >/dev/null || die "Homebrew is required: https://brew.sh"
 
 # --- 1. Homebrew dependencies -----------------------------------------------
@@ -70,13 +70,13 @@ done
 # --- 5b. Dictation models -------------------------------------------------------
 # Silero VAD is 2 MB. The two MLX models are ~1.2 GB and ~2.5 GB and come
 # from Hugging Face on first use anyway; fetching them here just means the
-# first dictation is not a four-minute wait. Set TTT_SKIP_MODELS=1 to defer.
+# first dictation is not a four-minute wait. Set BELLOWFLO_SKIP_MODELS=1 to defer.
 if [ ! -f "$KOKORO/silero_vad.onnx" ]; then
   say "Downloading Silero VAD"
   curl -sL -o "$KOKORO/silero_vad.onnx" \
     "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx"
 fi
-if [ -z "${TTT_SKIP_MODELS:-}" ]; then
+if [ -z "${BELLOWFLO_SKIP_MODELS:-${TTT_SKIP_MODELS:-}}" ]; then
   say "Fetching dictation models (~3.7 GB, cached in ~/.cache/huggingface)"
   "$KOKORO/venv/bin/python" -c '
 from huggingface_hub import snapshot_download
@@ -89,21 +89,36 @@ fi
 # --- 6. ktts on PATH ------------------------------------------------------------
 chmod +x "$KOKORO/ktts" "$KOKORO/daemon.py" "$KOKORO/speak_response.py" \
          "$KOKORO/codex_notify.py" "$KOKORO/cursor_notify.py" \
-         "$KOKORO/tldr.py" "$KOKORO/ttt-set-key"
+         "$KOKORO/tldr.py" "$KOKORO/bellowflo-set-key"
 BIN="$(brew --prefix)/bin"
 say "Linking $BIN/ktts"
 ln -sf "$KOKORO/ktts" "$BIN/ktts"
-ln -sf "$KOKORO/ttt-set-key" "$BIN/ttt-set-key"
+ln -sf "$KOKORO/bellowflo-set-key" "$BIN/bellowflo-set-key"
 
 # --- 7. The app ----------------------------------------------------------------
-say "Building Talk Talk Talk.app"
-"$REPO/macos/TalkTalkTalk/build-app.sh" >/dev/null \
-  || die "the app failed to build — run macos/TalkTalkTalk/build-app.sh to see why"
-BUILT="$REPO/macos/TalkTalkTalk/build/Talk Talk Talk.app"
+say "Building Bellow Flo.app"
+"$REPO/macos/BellowFlo/build-app.sh" >/dev/null \
+  || die "the app failed to build — run macos/BellowFlo/build-app.sh to see why"
+BUILT="$REPO/macos/BellowFlo/build/Bellow Flo.app"
 [ -d "$BUILT" ] || die "no app bundle at $BUILT"
 
 # Replacing a running copy leaves the old process holding the hotkeys.
+pkill -f "Bellow Flo.app/Contents/MacOS/BellowFlo" 2>/dev/null || true
+# Retire the copy installed under the app's previous name, Talk Talk Talk,
+# carrying its preferences across. macOS ties the Accessibility grant to the
+# bundle id, so that permission has to be granted again once.
+OLD_APP="$HOME/Applications/Talk Talk Talk.app"
+OLD_ID="com.talktalktalk.app"
 pkill -f "Talk Talk Talk.app/Contents/MacOS/TalkTalkTalk" 2>/dev/null || true
+if defaults read "$OLD_ID" >/dev/null 2>&1 && ! defaults read "$BUNDLE_ID" >/dev/null 2>&1; then
+  say "Carrying settings over from Talk Talk Talk"
+  defaults export "$OLD_ID" - | defaults import "$BUNDLE_ID" -
+fi
+if [ -d "$OLD_APP" ]; then
+  say "Removing the old Talk Talk Talk.app"
+  rm -rf "$OLD_APP"
+fi
+[ -L "$BIN/ttt-set-key" ] && rm -f "$BIN/ttt-set-key"
 sleep 1
 mkdir -p "$HOME/Applications"
 rm -rf "$APPDIR"
@@ -131,18 +146,18 @@ printf 'idle' > "$KOKORO/state"
 say "Hook OK"
 
 say "Smoke test (first run loads the model, ~3s)"
-"$BIN/ktts" say "Talk talk talk is installed." || die "smoke test failed — see $KOKORO/daemon.log"
+"$BIN/ktts" say "Bellow Flo is installed." || die "smoke test failed — see $KOKORO/daemon.log"
 
 open "$APPDIR"
 
 cat <<EOF
 
 ────────────────────────────────────────────────────────────────────────
-Talk Talk Talk is installed and running — look for the ◍ next to the clock.
+Bellow Flo is installed and running — look for the ◍ next to the clock.
 
 Remaining manual steps:
 
-1. Grant Accessibility permission to **Talk Talk Talk** in
+1. Grant Accessibility permission to **Bellow Flo** in
    System Settings → Privacy & Security → Accessibility.
    Speaking the selection works by copying it, and posting a ⌘C to
    another app is what that permission governs. The hotkeys themselves
@@ -176,6 +191,6 @@ Hotkeys: ⌃⌥S speak selection · ⌃⌥P play/pause · ⌃⌥← rewind ·
 Dictate: hold Right ⌥ and talk; release to paste. Change the key, or
          turn cleanup off, under Dictation in the menu. macOS will ask
          for microphone access the first time.
-Log:     ~/Library/Logs/TalkTalkTalk.log
+Log:     ~/Library/Logs/BellowFlo.log
 ────────────────────────────────────────────────────────────────────────
 EOF

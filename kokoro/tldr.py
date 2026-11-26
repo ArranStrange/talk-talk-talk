@@ -16,7 +16,7 @@ a few sentences never cost a provider call.
                existing sentences rather than writing new prose.
 
 API keys are read from the macOS Keychain, falling back to the environment.
-This script never writes a key anywhere; see `ttt-set-key` for storing one.
+This script never writes a key anywhere; see `bellowflo-set-key` for storing one.
 
 Usage:  … | tldr.py [--provider X] [--model Y] [--sentences N]
 """
@@ -32,8 +32,12 @@ import urllib.request
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 
-KEYCHAIN_ACCOUNT = "talk-talk-talk"
-KEYCHAIN_SERVICE = {"anthropic": "ttt-anthropic", "openai": "ttt-openai"}
+# (account, service) pairs, newest first. The second pair is the name the app
+# had before it became Bellow Flo, so a key stored back then still works.
+KEYCHAIN_ENTRIES = {
+    "anthropic": [("bellow-flo", "bellowflo-anthropic"), ("talk-talk-talk", "ttt-anthropic")],
+    "openai": [("bellow-flo", "bellowflo-openai"), ("talk-talk-talk", "ttt-openai")],
+}
 ENV_VAR = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 DEFAULT_MIN_WORDS = 70  # roughly a short paragraph; below this, don't bother
 DEFAULT_MODEL = {
@@ -53,12 +57,11 @@ def config():
 
 def api_key(provider):
     """Keychain first, then the environment. Never logged, never stored."""
-    service = KEYCHAIN_SERVICE.get(provider)
-    if service:
+    for account, service in KEYCHAIN_ENTRIES.get(provider, []):
         try:
             out = subprocess.run(
                 ["security", "find-generic-password",
-                 "-a", KEYCHAIN_ACCOUNT, "-s", service, "-w"],
+                 "-a", account, "-s", service, "-w"],
                 capture_output=True, text=True, timeout=10)
             if out.returncode == 0 and out.stdout.strip():
                 return out.stdout.strip()
@@ -107,7 +110,7 @@ def post_json(url, headers, payload, timeout=90):
 def via_anthropic(text, model, sentences):
     key = api_key("anthropic")
     if not key:
-        raise RuntimeError("no Anthropic API key stored (see: ttt-set-key anthropic)")
+        raise RuntimeError("no Anthropic API key stored (see: bellowflo-set-key anthropic)")
     headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
     # Identity-linked keys must name the workspace the request acts in.
     # Not a secret, so it lives in config.json rather than the Keychain.
@@ -129,7 +132,7 @@ def via_anthropic(text, model, sentences):
 def via_openai(text, model, sentences):
     key = api_key("openai")
     if not key:
-        raise RuntimeError("no OpenAI API key stored (see: ttt-set-key openai)")
+        raise RuntimeError("no OpenAI API key stored (see: bellowflo-set-key openai)")
     data = post_json(
         "https://api.openai.com/v1/chat/completions",
         {"authorization": f"Bearer {key}"},

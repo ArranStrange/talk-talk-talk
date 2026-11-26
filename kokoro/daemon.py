@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Talk Talk Talk — Kokoro TTS daemon.
+"""Bellow Flo — Kokoro TTS daemon.
 
 Loads the Kokoro model once and serves requests over a unix socket.
 Playback is streamed in-process via sounddevice, which gives instant
@@ -57,12 +57,12 @@ def find_espeak():
         data = os.path.join(prefix, "share", "espeak-ng-data")
         if os.path.exists(lib) and os.path.exists(data):
             return lib, data
-    lib = os.environ.get("TTT_ESPEAK_LIB")
-    data = os.environ.get("TTT_ESPEAK_DATA")
+    lib = os.environ.get("BELLOWFLO_ESPEAK_LIB")
+    data = os.environ.get("BELLOWFLO_ESPEAK_DATA")
     if lib and data:
         return lib, data
     sys.exit("espeak-ng not found: brew install espeak-ng "
-             "(or set TTT_ESPEAK_LIB / TTT_ESPEAK_DATA)")
+             "(or set BELLOWFLO_ESPEAK_LIB / BELLOWFLO_ESPEAK_DATA)")
 
 
 def set_state(state):

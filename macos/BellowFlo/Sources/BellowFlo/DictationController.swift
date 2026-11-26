@@ -93,7 +93,7 @@ final class DictationController {
         guard Recorder.isAuthorized else {
             Recorder.requestAccess { ok in
                 Hud.shared.show(ok ? "Microphone allowed — hold the key again to dictate"
-                                   : "Talk Talk Talk needs microphone access to dictate",
+                                   : "Bellow Flo needs microphone access to dictate",
                                 seconds: 4)
             }
             return

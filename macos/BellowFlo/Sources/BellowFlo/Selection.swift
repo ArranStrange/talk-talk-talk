@@ -17,7 +17,7 @@ enum Selection {
     /// wasn't one. The 0.25 s wait is for the target app to service the copy.
     static func capture(_ done: @escaping (String?) -> Void) {
         guard isTrusted else {
-            Hud.shared.show("Talk Talk Talk needs Accessibility permission\n"
+            Hud.shared.show("Bellow Flo needs Accessibility permission\n"
                             + "to read the selection", seconds: 4)
             requestTrust()
             done(nil)

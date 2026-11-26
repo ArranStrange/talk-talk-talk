@@ -6,7 +6,7 @@ import Foundation
 /// Python interpreter startup (~120 ms) just to write one JSON line. Here a
 /// click is a socket write, so the transport is no longer the slow part.
 enum Daemon {
-    private static let queue = DispatchQueue(label: "ttt.daemon")
+    private static let queue = DispatchQueue(label: "bellowflo.daemon")
 
     private static func connectFd() -> Int32? {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)

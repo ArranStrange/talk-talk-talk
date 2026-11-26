@@ -1,33 +1,33 @@
 #!/bin/bash
-# Builds Talk Talk Talk.app. Run from anywhere; installs nothing.
+# Builds Bellow Flo.app. Run from anywhere; installs nothing.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 OUT="${1:-$HERE/build}"
-APP="$OUT/Talk Talk Talk.app"
+APP="$OUT/Bellow Flo.app"
 
 echo "==> Compiling"
 cd "$HERE"
 swift build -c release
-BIN="$(swift build -c release --show-bin-path)/TalkTalkTalk"
+BIN="$(swift build -c release --show-bin-path)/BellowFlo"
 [ -x "$BIN" ] || { echo "error: no binary at $BIN" >&2; exit 1; }
 
 echo "==> Assembling the bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/TalkTalkTalk"
+cp "$BIN" "$APP/Contents/MacOS/BellowFlo"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Talk Talk Talk</string>
-  <key>CFBundleDisplayName</key><string>Talk Talk Talk</string>
-  <key>CFBundleIdentifier</key><string>com.talktalktalk.app</string>
-  <key>CFBundleExecutable</key><string>TalkTalkTalk</string>
-  <key>CFBundleIconFile</key><string>TalkTalkTalk</string>
+  <key>CFBundleName</key><string>Bellow Flo</string>
+  <key>CFBundleDisplayName</key><string>Bellow Flo</string>
+  <key>CFBundleIdentifier</key><string>com.bellowflo.app</string>
+  <key>CFBundleExecutable</key><string>BellowFlo</string>
+  <key>CFBundleIconFile</key><string>BellowFlo</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>2.0</string>
   <key>CFBundleVersion</key><string>2.0</string>
@@ -37,9 +37,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppleEventsUsageDescription</key>
-  <string>Talk Talk Talk reads the text you have selected.</string>
+  <string>Bellow Flo reads the text you have selected.</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Talk Talk Talk records while you hold the dictation key, then types what you said.</string>
+  <string>Bellow Flo records while you hold the dictation key, then types what you said.</string>
 </dict>
 </plist>
 PLIST
@@ -67,7 +67,7 @@ if command -v iconutil >/dev/null 2>&1 && [ -f "$REPO/macos/icon.png" ]; then
 512 512x512
 1024 512x512@2x
 SIZES
-  iconutil -c icns "$ISET" -o "$APP/Contents/Resources/TalkTalkTalk.icns"
+  iconutil -c icns "$ISET" -o "$APP/Contents/Resources/BellowFlo.icns"
   rm -rf "$(dirname "$ISET")"
 fi
 

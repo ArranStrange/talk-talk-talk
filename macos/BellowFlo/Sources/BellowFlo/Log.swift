@@ -1,10 +1,10 @@
 import Foundation
 
-/// Appends to ~/Library/Logs/TalkTalkTalk.log. A menu bar app has nowhere to
+/// Appends to ~/Library/Logs/BellowFlo.log. A menu bar app has nowhere to
 /// print, and "it launched but nothing works" is otherwise unanswerable.
 enum Log {
-    private static let path = NSHomeDirectory() + "/Library/Logs/TalkTalkTalk.log"
-    private static let queue = DispatchQueue(label: "ttt.log")
+    private static let path = NSHomeDirectory() + "/Library/Logs/BellowFlo.log"
+    private static let queue = DispatchQueue(label: "bellowflo.log")
     private static let stamp: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss"

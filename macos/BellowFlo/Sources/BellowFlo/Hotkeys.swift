@@ -37,7 +37,7 @@ final class Hotkeys {
         nextID += 1
         actions[id] = action
         var ref: EventHotKeyRef?
-        let hkID = EventHotKeyID(signature: OSType(0x54545454), id: id)  // 'TTTT'
+        let hkID = EventHotKeyID(signature: OSType(0x42464C4F), id: id)  // 'BFLO'
         let err = RegisterEventHotKey(UInt32(key), Hotkeys.ctrlAlt, hkID,
                                       GetApplicationEventTarget(), 0, &ref)
         if err == noErr, let ref { refs.append(ref) } else { actions[id] = nil }

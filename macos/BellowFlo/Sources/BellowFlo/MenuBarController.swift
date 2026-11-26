@@ -291,7 +291,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             Hud.shared.show("Engine will reload on next use")
         }
         menu.addItem(.separator())
-        add(menu, "Quit Talk Talk Talk") { self.coord.quit() }
+        add(menu, "Quit Bellow Flo") { self.coord.quit() }
     }
 
     private func tldrMenu(_ cfg: Config) -> NSMenu {
@@ -351,7 +351,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                   ("openai", "Store ChatGPT API key…")] {
             add(m, label) {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString("ttt-set-key \(provider)", forType: .string)
+                NSPasteboard.general.setString("bellowflo-set-key \(provider)", forType: .string)
                 Hud.shared.show("Command copied — paste it in Terminal.\n"
                                 + "Your key is typed straight into the Keychain.",
                                 seconds: 5)

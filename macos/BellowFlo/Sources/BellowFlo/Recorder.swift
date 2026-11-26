@@ -9,7 +9,7 @@ final class Recorder {
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var pcm = Data()
-    private let queue = DispatchQueue(label: "ttt.recorder")
+    private let queue = DispatchQueue(label: "bellowflo.recorder")
     private(set) var startedAt: Date?
 
     static let sampleRate: Double = 16000
@@ -35,7 +35,7 @@ final class Recorder {
                                             sampleRate: Recorder.sampleRate,
                                             channels: 1, interleaved: true),
               let conv = AVAudioConverter(from: inFormat, to: outFormat) else {
-            throw NSError(domain: "ttt", code: 1,
+            throw NSError(domain: "bellowflo", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "no audio converter"])
         }
         converter = conv

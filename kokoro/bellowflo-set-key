@@ -1,5 +1,5 @@
 #!/bin/bash
-# Store an API key for Talk Talk Talk in the macOS Keychain.
+# Store an API key for Bellow Flo in the macOS Keychain.
 #
 # The key is typed straight into `security`, which prompts for it without
 # echoing and without it ever appearing in a command line, a shell history,
@@ -7,21 +7,21 @@
 set -euo pipefail
 
 case "${1:-}" in
-  anthropic) svc=ttt-anthropic; label="Anthropic (Claude)"; prefix="sk-ant-" ;;
-  openai)    svc=ttt-openai;    label="OpenAI (ChatGPT)";   prefix="sk-" ;;
-  *) echo "usage: ttt-set-key anthropic|openai"; exit 1 ;;
+  anthropic) svc=bellowflo-anthropic; label="Anthropic (Claude)"; prefix="sk-ant-" ;;
+  openai)    svc=bellowflo-openai; label="OpenAI (ChatGPT)";   prefix="sk-" ;;
+  *) echo "usage: bellowflo-set-key anthropic|openai"; exit 1 ;;
 esac
 
 echo "Storing an API key for $label."
 echo "Paste it at the prompt below — it will not be shown as you type."
-security add-generic-password -U -a talk-talk-talk -s "$svc" -w
+security add-generic-password -U -a bellow-flo -s "$svc" -w
 
 # Report the shape of what landed, without ever showing it. Deliberately
 # no expected-length check: key formats and lengths change between
 # providers and over time, so a length rule mostly manufactures false
 # "your key is truncated" diagnoses. Only whitespace and a wrong prefix
 # are reliable signals of a bad paste.
-stored=$(security find-generic-password -a talk-talk-talk -s "$svc" -w 2>/dev/null || true)
+stored=$(security find-generic-password -a bellow-flo -s "$svc" -w 2>/dev/null || true)
 len=${#stored}
 echo ""
 echo "Saved to your Keychain ($len characters)."
@@ -41,7 +41,7 @@ case "$stored" in
     echo "the key."
     ;;
 esac
-echo "Talk Talk Talk will read it from the Keychain when it needs it."
+echo "Bellow Flo will read it from the Keychain when it needs it."
 echo "If the provider rejects it, the likeliest causes are that the key was"
 echo "revoked, belongs to a different account, or that the account has no"
 echo "credits — not that it was mistyped."

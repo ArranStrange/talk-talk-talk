@@ -49,7 +49,7 @@ final class Coordinator {
                   + "menubar=\(menu != nil) state=\(state)")
 
         if !Selection.isTrusted {
-            Hud.shared.show("Talk Talk Talk needs Accessibility permission\n"
+            Hud.shared.show("Bellow Flo needs Accessibility permission\n"
                             + "to read the selected text", seconds: 5)
             Selection.requestTrust()
         }

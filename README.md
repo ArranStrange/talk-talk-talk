@@ -1,6 +1,6 @@
-# Talk Talk Talk
+# Bellow Flo
 
-<img src="macos/icon.png" width="96" alt="Talk Talk Talk icon">
+<img src="macos/icon.png" width="96" alt="Bellow Flo icon">
 
 Local, free text-to-speech for your Mac — a native menu bar app with a
 floating status pill, global hotkeys, and automatic read-aloud of
@@ -62,13 +62,13 @@ account, no network calls after install.
 
 ## Closing and reopening it
 
-**Quit Talk Talk Talk** (bottom of the menu) releases the hotkeys, stops
+**Quit Bellow Flo** (bottom of the menu) releases the hotkeys, stops
 every timer and watcher, and shuts the speech daemon down so it gives back
 its ~600 MB. Reopen it from the Dock, `~/Applications`, or Spotlight.
 **Start at login** in the same menu keeps it there across restarts.
 
 The app is a menu bar app, so it holds no Dock tile of its own while
-running — drag **~/Applications/Talk Talk Talk.app** to the Dock and the
+running — drag **~/Applications/Bellow Flo.app** to the Dock and the
 icon stays there whether it is running or not.
 
 The mark in the menu bar and on the pill is `macos/logo.png`, trimmed to
@@ -80,7 +80,7 @@ falls back to ad-hoc. Prefer an identity: ad-hoc reduces the designated
 requirement to a bare `cdhash`, so every rebuild looks like a different app
 to macOS and orphans the Accessibility grant.
 
-If it ever misbehaves, `~/Library/Logs/TalkTalkTalk.log` records startup
+If it ever misbehaves, `~/Library/Logs/BellowFlo.log` records startup
 (how many hotkeys were claimed, whether Accessibility was granted, which
 engine directory it found) and any command the daemon refused.
 
@@ -244,11 +244,11 @@ agent-reply cleaner, so a selection you read with `⌃⌥S`, the clipboard and
 | Provider | Cost | Speed | Setup |
 |---|---|---|---|
 | `claude-cli` (default) | none, draws on your Claude plan allowance | ~11–20 s | none |
-| `anthropic` | ~$0.004 per 2,000 words on Haiku | ~2 s | `ttt-set-key anthropic` |
-| `openai` | comparable, model-dependent | ~2 s | `ttt-set-key openai` |
+| `anthropic` | ~$0.004 per 2,000 words on Haiku | ~2 s | `bellowflo-set-key anthropic` |
+| `openai` | comparable, model-dependent | ~2 s | `bellowflo-set-key openai` |
 | `extractive` | free, offline | instant | none |
 
-`ttt-set-key` types your key straight into `security`, which prompts for it
+`bellowflo-set-key` types your key straight into `security`, which prompts for it
 without echoing, so the key never appears in a command line, shell history,
 config file or log. It is read back from the Keychain at call time, and
 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` work as a fallback.
@@ -262,7 +262,7 @@ Cursor afterAgentResponse ┤
                         │
 ktts (CLI) ─────────────┤  unix socket
                         ▼
-              kokoro daemon (venv)       Talk Talk Talk.app (Swift)
+              kokoro daemon (venv)       Bellow Flo.app (Swift)
               · model resident in RAM    · FSEvents on the state file
               · synthesizes per-sentence · draws the pill + waveform
               · streams via CoreAudio    · Carbon hotkeys, Fn watcher
@@ -312,9 +312,9 @@ utterance, and how long after the request speech began.
 
 ```bash
 ktts quit
-rm -rf ~/Applications/"Talk Talk Talk.app"
-rm "$(brew --prefix)/bin/ktts" "$(brew --prefix)/bin/ttt-set-key"
-defaults delete com.talktalktalk.app
+rm -rf ~/Applications/"Bellow Flo.app"
+rm "$(brew --prefix)/bin/ktts" "$(brew --prefix)/bin/bellowflo-set-key"
+defaults delete com.bellowflo.app
 # remove the hook snippets from ~/.claude/settings.json, ~/.codex/config.toml
 # and ~/.cursor/hooks.json, then delete this repo folder
 ```
