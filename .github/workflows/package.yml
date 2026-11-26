@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch replaces a run still in progress.
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows:
     runs-on: windows-latest

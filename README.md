@@ -2,7 +2,7 @@
 
 <img src="macos/icon.png" width="96" alt="Bellow Flo icon">
 
-Local, free text-to-speech for your Mac — a native menu bar app with a
+Local, free text-to-speech for your Mac and PC: a native menu bar (or system tray) app with a
 floating status pill, global hotkeys, and automatic read-aloud of
 **Claude Code**, **Codex CLI**, and **Cursor** responses. Everything runs
 on-device using the open-weights
@@ -93,11 +93,35 @@ a full Xcode is not needed), ~1 GB disk (model + venv), ~600 MB RAM while
 the speech daemon is resident (`ktts quit` frees it; it restarts on next
 use).
 
-**Windows:** a system tray version that runs the same engine is in
-[`windows/`](windows/README.md). It has not been tested on Windows yet, and
-for now it is set up from source.
+**Windows:** a system tray version runs the same engine; see
+[`windows/`](windows/README.md).
 
-## Install
+## Download (no developer tools needed)
+
+Get the latest build from the
+[Releases page](https://github.com/ArranStrange/talk-talk-talk/releases).
+Each one includes its own Python and the voice models, so there is nothing
+else to install.
+
+- **Mac (Apple Silicon):** open `BellowFlo-…-macos-arm64.dmg` and drag
+  Bellow Flo into Applications. Unless the build is notarized, the first
+  launch is blocked: open System Settings → Privacy & Security, scroll down,
+  and click **Open Anyway**.
+  - When asked, allow **Accessibility**, which reading the selected text
+    needs.
+  - Allow **Microphone** too, which dictation needs.
+- **Windows 10/11 (x64):** run `BellowFlo-…-windows-x64-setup.exe`. It
+  installs for your user only and needs no administrator rights. Unless the
+  build is signed, SmartScreen says "Windows protected your PC": click
+  **More info → Run anyway**.
+
+Speech works offline straight away. Dictation downloads its models (about
+3 GB) the first time you use it, and the app tells you while it does.
+
+The agent hooks (Claude Code, Codex, Cursor) still need the source install
+below.
+
+## Install from source
 
 ```bash
 git clone https://github.com/ArranStrange/talk-talk-talk.git
