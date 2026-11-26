@@ -24,6 +24,8 @@ import json
 import os
 import shutil
 import sys
+import threading
+import time
 
 ENGINE_DIR = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
 
@@ -106,10 +108,27 @@ def venv_python():
 
 def write_atomic(path, text):
     """Write so a watcher never sees a half-written file."""
-    tmp = path + ".tmp"
+    # A temporary name per writer: the daemon writes from several threads,
+    # and on Windows one writer's replace fails while another holds a shared
+    # temp file open (and the loser then finds its file gone).
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
-    os.replace(tmp, path)
+    # Windows refuses to replace a file another process has open at that
+    # instant (the app reading the state file it just saw change). The
+    # window is a few milliseconds, so wait it out rather than lose the write.
+    for attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+            time.sleep(0.01)
 
 
 def migrate(old_dir, verbose=False):

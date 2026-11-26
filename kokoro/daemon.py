@@ -28,6 +28,34 @@ import bf_ipc    # noqa: E402
 import bf_paths  # noqa: E402
 
 bf_paths.ensure()
+
+# --log: append our own output to the daemon log. For launchers that cannot
+# hand a child a file as its stdout (the Windows app starts us with no
+# console, where stdout would otherwise go nowhere). Done before the heavy
+# imports below, because they print too.
+if "--log" in sys.argv:
+    _log = open(bf_paths.DAEMON_LOG, "a", encoding="utf-8", buffering=1)
+    # The descriptors too, not only sys.stdout: native libraries (onnxruntime,
+    # PortAudio) write to fd 1 and 2 directly, and with no console those
+    # messages would otherwise vanish.
+    try:
+        os.dup2(_log.fileno(), 1)
+        os.dup2(_log.fileno(), 2)
+    except OSError:
+        pass
+    if os.name == "nt":
+        # Code that writes through the Win32 standard handles rather than
+        # the C runtime's descriptors needs those pointed at the log too.
+        try:
+            import ctypes
+            import msvcrt
+            handle = msvcrt.get_osfhandle(_log.fileno())
+            ctypes.windll.kernel32.SetStdHandle(-11, handle)   # STD_OUTPUT_HANDLE
+            ctypes.windll.kernel32.SetStdHandle(-12, handle)   # STD_ERROR_HANDLE
+        except (OSError, AttributeError, ImportError):
+            pass
+    sys.stdout = sys.stderr = _log
+
 STATE_PATH = bf_paths.STATE
 WORD_PATH = bf_paths.WORD
 
@@ -46,9 +74,7 @@ def _cfg_value(key, default):
 def set_word(word):
     """Publish the currently-spoken word for the RSVP drawer."""
     try:
-        with open(WORD_PATH + ".tmp", "w", encoding="utf-8") as f:
-            f.write(word)
-        os.replace(WORD_PATH + ".tmp", WORD_PATH)
+        bf_paths.write_atomic(WORD_PATH, word)
     except (OSError, ValueError):
         pass
 
@@ -83,9 +109,7 @@ def set_state(state):
     file, so the daemon's idea of the last state can go stale.
     """
     try:
-        with open(STATE_PATH + ".tmp", "w", encoding="utf-8") as f:
-            f.write(state)
-        os.replace(STATE_PATH + ".tmp", STATE_PATH)
+        bf_paths.write_atomic(STATE_PATH, state)
     except (OSError, ValueError):
         pass
 

@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -59,11 +60,16 @@ def prompt_for(text, sentences):
 
 
 def via_claude_cli(text, model, sentences):
-    cmd = ["claude", "-p", prompt_for(text, sentences)]
+    # The text goes in on stdin, not the command line. On Windows the CLI is
+    # usually claude.cmd, which runs through cmd.exe: an argument there is
+    # capped at ~8,000 characters and cmd.exe would interpret quotes and
+    # metacharacters in the selection. which() finds the .cmd via PATHEXT.
+    exe = shutil.which("claude") or "claude"
+    cmd = [exe, "-p", prompt_for("(the text on standard input)", sentences)]
     if model:
         cmd[1:1] = ["--model", model]
-    out = subprocess.run(cmd, capture_output=True, text=True,
-                         timeout=120, stdin=subprocess.DEVNULL)
+    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", timeout=120, input=text)
     if out.returncode != 0:
         raise RuntimeError((out.stderr or "claude CLI failed").strip()[:300])
     return out.stdout.strip()

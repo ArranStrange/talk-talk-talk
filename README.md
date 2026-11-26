@@ -93,6 +93,10 @@ a full Xcode is not needed), ~1 GB disk (model + venv), ~600 MB RAM while
 the speech daemon is resident (`ktts quit` frees it; it restarts on next
 use).
 
+**Windows:** a system tray version that runs the same engine is in
+[`windows/`](windows/README.md). It has not been tested on Windows yet, and
+for now it is set up from source.
+
 ## Install
 
 ```bash
