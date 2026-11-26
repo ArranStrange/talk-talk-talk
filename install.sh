@@ -4,7 +4,6 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
 KOKORO="$REPO/kokoro"
-MODEL_BASE="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
 APPDIR="$HOME/Applications/Bellow Flo.app"
 BUNDLE_ID="com.bellowflo.app"
 
@@ -53,37 +52,47 @@ if [ ! -x "$KOKORO/venv/bin/python" ]; then
 else
   say "venv already present"
 fi
-# Dictation: Parakeet (speech to text) and Qwen (cleanup), both on MLX.
-say "Checking dictation packages (parakeet-mlx, mlx-lm)"
-"$KOKORO/venv/bin/pip" install --quiet parakeet-mlx mlx-lm
+# Dictation: Parakeet (speech to text) and Qwen (cleanup). MLX on Apple
+# Silicon; ONNX + llama.cpp on Intel, the same runtime Windows uses.
+# Ask the venv's own interpreter: `uname -m` says x86_64 in a Rosetta shell
+# even on Apple Silicon, which would install the slow stack for no reason.
+if [ "$("$KOKORO/venv/bin/python" -c 'import platform; print(platform.machine())')" = "arm64" ]; then
+  say "Checking dictation packages (parakeet-mlx, mlx-lm)"
+  "$KOKORO/venv/bin/pip" install --quiet parakeet-mlx mlx-lm
+else
+  say "Checking dictation packages (onnx-asr, llama-cpp-python)"
+  "$KOKORO/venv/bin/pip" install --quiet onnx-asr llama-cpp-python
+fi
 
-# --- 5. Model weights (Apache 2.0, ~340 MB total) ------------------------------
-for f in kokoro-v1.0.onnx voices-v1.0.bin; do
-  if [ ! -f "$KOKORO/$f" ]; then
-    say "Downloading $f"
-    curl -L --progress-bar -o "$KOKORO/$f" "$MODEL_BASE/$f"
-  else
-    say "$f already present"
+# --- 5. User data and model weights --------------------------------------------
+# Code stays here; config, dictionary, staged text and model weights live in
+# ~/Library/Application Support/Bellow Flo. Carry them over from wherever the
+# engine ran before (an older checkout, or this one before the split).
+DATA="$("$KOKORO/venv/bin/python" "$KOKORO/bf_paths.py")"
+say "Data folder: $DATA"
+for OLD_ID in "$BUNDLE_ID" com.talktalktalk.app; do
+  OLD_KOKORO="$(defaults read "$OLD_ID" kokoroDir 2>/dev/null || true)"
+  if [ -n "$OLD_KOKORO" ] && [ -d "$OLD_KOKORO" ]; then
+    "$KOKORO/venv/bin/python" "$KOKORO/bf_paths.py" migrate "$OLD_KOKORO"
   fi
 done
+"$KOKORO/venv/bin/python" "$KOKORO/bf_paths.py" migrate "$KOKORO"
+# Kokoro (Apache 2.0, ~340 MB) and Silero VAD (MIT, 2 MB), if not carried over.
+"$KOKORO/venv/bin/python" "$KOKORO/bf_paths.py" models
 
-# --- 5b. Dictation models -------------------------------------------------------
-# Silero VAD is 2 MB. The two MLX models are ~1.2 GB and ~2.5 GB and come
-# from Hugging Face on first use anyway; fetching them here just means the
-# first dictation is not a four-minute wait. Set BELLOWFLO_SKIP_MODELS=1 to defer.
-if [ ! -f "$KOKORO/silero_vad.onnx" ]; then
-  say "Downloading Silero VAD"
-  curl -sL -o "$KOKORO/silero_vad.onnx" \
-    "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx"
-fi
+# The two dictation models are ~1.2 GB and ~2.5 GB and come from Hugging
+# Face on first use anyway; fetching them here just means the first
+# dictation is not a four-minute wait. Set BELLOWFLO_SKIP_MODELS=1 to defer.
 if [ -z "${BELLOWFLO_SKIP_MODELS:-${TTT_SKIP_MODELS:-}}" ]; then
   say "Fetching dictation models (~3.7 GB, cached in ~/.cache/huggingface)"
   "$KOKORO/venv/bin/python" -c '
-from huggingface_hub import snapshot_download
-for repo in ("mlx-community/parakeet-tdt-0.6b-v3", "mlx-community/Qwen3-4B-Instruct-2507-4bit"):
-    snapshot_download(repo)
-    print("  ready:", repo)
-'
+import sys; sys.path.insert(0, sys.argv[1])
+import bf_paths, dictate_backends as b
+cfg = bf_paths.load_config()
+eng = b.choose(cfg)
+eng.load_stt(cfg); eng.load_llm(cfg)
+print("  ready:", eng.name)
+' "$KOKORO"
 fi
 
 # --- 6. ktts on PATH ------------------------------------------------------------
@@ -139,14 +148,14 @@ cat > "$HOOKTMP/t.jsonl" <<'JSONL'
 JSONL
 printf '{"session_id":"smoke","transcript_path":"%s/t.jsonl","hook_event_name":"Stop"}' "$HOOKTMP" \
   | "$KOKORO/speak_response.py" || die "the response hook failed to run"
-grep -q "smoke test" "$KOKORO/pending.txt" 2>/dev/null \
+grep -q "smoke test" "$DATA/pending.txt" 2>/dev/null \
   || die "the response hook ran but staged nothing"
 rm -rf "$HOOKTMP"
-printf 'idle' > "$KOKORO/state"
+printf 'idle' > "$DATA/state"
 say "Hook OK"
 
 say "Smoke test (first run loads the model, ~3s)"
-"$BIN/ktts" say "Bellow Flo is installed." || die "smoke test failed — see $KOKORO/daemon.log"
+"$BIN/ktts" say "Bellow Flo is installed." || die "smoke test failed — see $DATA/daemon.log"
 
 open "$APPDIR"
 

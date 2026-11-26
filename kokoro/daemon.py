@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bellow Flo — Kokoro TTS daemon.
 
-Loads the Kokoro model once and serves requests over a unix socket.
+Loads the Kokoro model once and serves requests over a local socket (bf_ipc).
 Playback is streamed in-process via sounddevice, which gives instant
 pause/resume and a seekable cursor for rollback.
 
@@ -18,22 +18,25 @@ Run under the project venv (ktts handles this).
 import json
 import os
 import re
-import socket
 import sys
 import threading
 import time
 
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
-SOCK_PATH = os.path.join(HERE, "daemon.sock")
-STATE_PATH = os.path.join(HERE, "state")
-WORD_PATH = os.path.join(HERE, "word")
+sys.path.insert(0, HERE)
+import bf_ipc    # noqa: E402
+import bf_paths  # noqa: E402
+
+bf_paths.ensure()
+STATE_PATH = bf_paths.STATE
+WORD_PATH = bf_paths.WORD
 
 
 def _cfg_value(key, default):
     """One value from config.json, or the default. The daemon otherwise
     receives its settings in each request; this is for tuning knobs."""
     try:
-        with open(os.path.join(HERE, "config.json")) as f:
+        with open(bf_paths.CONFIG, encoding="utf-8") as f:
             v = json.load(f).get(key)
         return default if v is None else v
     except (OSError, ValueError):
@@ -43,26 +46,34 @@ def _cfg_value(key, default):
 def set_word(word):
     """Publish the currently-spoken word for the RSVP drawer."""
     try:
-        with open(WORD_PATH + ".tmp", "w") as f:
+        with open(WORD_PATH + ".tmp", "w", encoding="utf-8") as f:
             f.write(word)
         os.replace(WORD_PATH + ".tmp", WORD_PATH)
-    except OSError:
+    except (OSError, ValueError):
         pass
 
 
 def find_espeak():
-    """Locate Homebrew's espeak-ng (Apple Silicon or Intel prefix)."""
+    """Locate espeak-ng: an explicit override, then Homebrew's (what macOS
+    installs have always used, so voices sound the same as before), then
+    the copy espeakng-loader ships inside the venv, which is what Windows
+    and a packaged build use."""
+    lib = os.environ.get("BELLOWFLO_ESPEAK_LIB")
+    data = os.environ.get("BELLOWFLO_ESPEAK_DATA")
+    if lib and data:
+        return lib, data
     for prefix in ("/opt/homebrew", "/usr/local"):
         lib = os.path.join(prefix, "lib", "libespeak-ng.dylib")
         data = os.path.join(prefix, "share", "espeak-ng-data")
         if os.path.exists(lib) and os.path.exists(data):
             return lib, data
-    lib = os.environ.get("BELLOWFLO_ESPEAK_LIB")
-    data = os.environ.get("BELLOWFLO_ESPEAK_DATA")
-    if lib and data:
-        return lib, data
-    sys.exit("espeak-ng not found: brew install espeak-ng "
-             "(or set BELLOWFLO_ESPEAK_LIB / BELLOWFLO_ESPEAK_DATA)")
+    try:
+        import espeakng_loader
+        return espeakng_loader.get_library_path(), espeakng_loader.get_data_path()
+    except Exception:
+        pass
+    sys.exit("espeak-ng not found: pip install espeakng-loader, or brew install "
+             "espeak-ng (or set BELLOWFLO_ESPEAK_LIB / BELLOWFLO_ESPEAK_DATA)")
 
 
 def set_state(state):
@@ -72,10 +83,10 @@ def set_state(state):
     file, so the daemon's idea of the last state can go stale.
     """
     try:
-        with open(STATE_PATH + ".tmp", "w") as f:
+        with open(STATE_PATH + ".tmp", "w", encoding="utf-8") as f:
             f.write(state)
         os.replace(STATE_PATH + ".tmp", STATE_PATH)
-    except OSError:
+    except (OSError, ValueError):
         pass
 
 
@@ -135,12 +146,12 @@ _opts = ort.SessionOptions()
 _opts.intra_op_num_threads = synth_threads()
 _opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 _session = ort.InferenceSession(
-    os.path.join(HERE, "kokoro-v1.0.onnx"), _opts,
+    bf_paths.model("kokoro-v1.0.onnx"), _opts,
     providers=["CPUExecutionProvider"],
 )
 kokoro = Kokoro.from_session(
     _session,
-    os.path.join(HERE, "voices-v1.0.bin"),
+    bf_paths.model("voices-v1.0.bin"),
     espeak_config=EspeakConfig(lib_path=ESPEAK_LIB, data_path=ESPEAK_DATA),
 )
 # Warm up the graph so the first real request is fast too.
@@ -987,6 +998,7 @@ def handle(req):
 
         def _exit_soon():
             time.sleep(0.3)  # let the reply reach the client first
+            bf_ipc.cleanup()
             os._exit(0)
 
         threading.Thread(target=_exit_soon, daemon=True).start()
@@ -1021,10 +1033,35 @@ def handle(req):
     return {"ok": False, "msg": f"unknown command: {cmd}"}
 
 
-def _serve(conn):
+def _read_request(conn):
+    """One JSON object. Read until it parses rather than trusting a single
+    recv: a long selection can arrive in pieces. Clients either close their
+    sending side (ktts) or simply stop writing (the app), so both end it."""
+    buf = b""
+    while len(buf) < (16 << 20):
+        piece = conn.recv(1 << 20)
+        if not piece:
+            break
+        buf += piece
+        try:
+            return json.loads(buf.decode())
+        except (UnicodeDecodeError, ValueError):
+            continue
+    return json.loads(buf.decode())
+
+
+def _serve(conn, server):
     try:
-        data = conn.recv(1 << 20)
-        reply = handle(json.loads(data.decode()))
+        # A client that connects and never finishes a request must not hold
+        # a thread forever. Replies (a transcription) may take longer, so
+        # the timeout covers the read only.
+        conn.settimeout(10)
+        req = _read_request(conn)
+        conn.settimeout(None)
+        if not server.authorised(req):
+            reply = {"ok": False, "msg": "unauthorised"}
+        else:
+            reply = handle(req)
         conn.sendall(json.dumps(reply).encode())
     except Exception as e:
         try:
@@ -1036,19 +1073,14 @@ def _serve(conn):
 
 
 def main():
-    try:
-        os.unlink(SOCK_PATH)
-    except OSError:
-        pass
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(SOCK_PATH)
-    server.listen(8)
+    server = bf_ipc.Server()
+    print(f"listening ({server.kind}) — data in {bf_paths.DATA_DIR}", flush=True)
     # A thread per connection: transcription takes a second or so, and
     # every command already takes the locks it needs, so a stop or pause
     # must not queue behind it.
     while True:
-        conn, _ = server.accept()
-        threading.Thread(target=_serve, args=(conn,), daemon=True).start()
+        conn = server.accept()
+        threading.Thread(target=_serve, args=(conn, server), daemon=True).start()
 
 
 if __name__ == "__main__":

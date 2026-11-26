@@ -8,7 +8,7 @@ Add to ~/.codex/config.toml:
   notify = ["<repo>/kokoro/codex_notify.py"]
 
 If something else already occupies your notify slot, preserve it by
-creating notify_forward.json next to this script containing the original
+creating notify_forward.json in the data folder (python3 bf_paths.py prints it) containing the original
 argv, e.g.:
   ["/path/to/original-notifier", "turn-ended"]
 Every event is forwarded to it (with the JSON payload appended) before
@@ -22,8 +22,9 @@ import sys
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 from speak_response import clean_for_speech, stage  # noqa: E402
+import bf_paths  # noqa: E402
 
-FORWARD_CONFIG = os.path.join(HERE, "notify_forward.json")
+FORWARD_CONFIG = bf_paths.data("notify_forward.json")
 
 
 def forward(json_arg):
@@ -39,7 +40,7 @@ def forward(json_arg):
             argv + [json_arg],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
+            **({"start_new_session": True} if os.name == "posix" else {}),
         )
     except OSError:
         pass

@@ -52,7 +52,8 @@ account, no network calls after install.
   what you said is typed where the cursor is. Speech to text is NVIDIA's
   Parakeet, then Qwen3 removes the ums, keeps only the correction when you
   correct yourself, applies your personal dictionary and fixes punctuation.
-  Both run on-device via MLX; nothing leaves the machine. Roughly a second
+  Both run on-device (MLX on Apple Silicon, ONNX and llama.cpp elsewhere);
+  nothing leaves the machine. Roughly a second
   from release to text. See [Dictation](#dictation) below.
 - **Dictation-aware** — hold-Fn dictation tools (e.g. Wispr Flow) auto-pause
   speech while you talk and resume when you release
@@ -102,7 +103,8 @@ cd talk-talk-talk
 
 The installer: installs `espeak-ng` via Homebrew, creates a Python venv,
 downloads the Kokoro model weights (~340 MB, Apache 2.0) from the official
-[kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) release, links
+[kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) release (or
+carries them over from an earlier install), links
 `ktts` onto your PATH, builds and installs the app into `~/Applications`,
 and runs a smoke test that executes the response hook rather than merely
 compiling it. It then prints the manual steps: granting the app
@@ -166,8 +168,12 @@ lands at the cursor via ⌘V and your previous clipboard is put back.
 | Stage | Model | Licence | What it does |
 |---|---|---|---|
 | Silence | [Silero VAD](https://github.com/snakers4/silero-vad) | MIT | trims the ends; an accidental tap pastes nothing |
-| Speech to text | [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) via [parakeet-mlx](https://github.com/senstella/parakeet-mlx) | CC-BY-4.0 | transcription with punctuation, 25 languages |
-| Cleanup | [Qwen3 4B Instruct](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) via [mlx-lm](https://github.com/ml-explore/mlx-lm) | Apache 2.0 | fillers out, self-corrections resolved, dictionary applied |
+| Speech to text | [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) via [parakeet-mlx](https://github.com/senstella/parakeet-mlx), or [onnx-asr](https://github.com/istupakov/onnx-asr) (int8) | CC-BY-4.0 | transcription with punctuation, 25 languages |
+| Cleanup | [Qwen3 4B Instruct](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) via [mlx-lm](https://github.com/ml-explore/mlx-lm), or a Q4_K_M GGUF via [llama.cpp](https://github.com/abetlen/llama-cpp-python) | Apache 2.0 | fillers out, self-corrections resolved, dictionary applied |
+
+Apple Silicon uses MLX. Everywhere else — Intel Macs, and Windows — uses
+the ONNX/llama.cpp pair (`dictate_backends.py`); set `"dictation_backend":
+"onnx"` in `config.json` to use it on Apple Silicon too.
 
 The cleanup step is the one that makes it feel like writing rather than a
 transcript: "send it Tuesday, no, Wednesday" becomes "send it Wednesday".
@@ -182,7 +188,7 @@ else. Hover for the full text and, where cleanup changed it, the raw
 transcript. **Clear recent dictations** forgets them.
 
 **Dictionary.** Names, products and jargon the transcriber keeps getting
-wrong go in `kokoro/dictionary.txt`, one per line (**Dictation → Edit
+wrong go in `dictionary.txt` in the data folder, one per line (**Dictation → Edit
 dictionary…**). The cleanup model is told to spell them exactly.
 
 **Speed.** Release to text is about a second on an M4 Pro: ~140 ms of
@@ -253,6 +259,22 @@ without echoing, so the key never appears in a command line, shell history,
 config file or log. It is read back from the Keychain at call time, and
 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` work as a fallback.
 
+## Where things live
+
+Code and data are kept apart, so the engine can ship read-only inside an
+app bundle:
+
+| | macOS | Windows |
+|---|---|---|
+| Engine (code, venv) | this repo's `kokoro/` | install folder |
+| Data: `config.json`, `dictionary.txt`, staged text, `daemon.log`, model weights in `models/` | `~/Library/Application Support/Bellow Flo` | `%LOCALAPPDATA%\Bellow Flo` |
+| Daemon endpoint | `daemon.sock` (unix socket) | `daemon.port` (loopback TCP + token) |
+| API keys | Keychain | Credential Manager |
+| Dictation models | `~/.cache/huggingface` | `%USERPROFILE%\.cache\huggingface` |
+
+`python3 kokoro/bf_paths.py` prints the data folder; `BELLOWFLO_DATA`
+overrides it.
+
 ## How it works
 
 ```
@@ -260,7 +282,7 @@ Claude Code Stop hook ──┐
 Codex notify hook ──────┤  stage text →  pending.txt + state file
 Cursor afterAgentResponse ┤
                         │
-ktts (CLI) ─────────────┤  unix socket
+ktts (CLI) ─────────────┤  local socket (bf_ipc.py)
                         ▼
               kokoro daemon (venv)       Bellow Flo.app (Swift)
               · model resident in RAM    · FSEvents on the state file
@@ -315,6 +337,7 @@ ktts quit
 rm -rf ~/Applications/"Bellow Flo.app"
 rm "$(brew --prefix)/bin/ktts" "$(brew --prefix)/bin/bellowflo-set-key"
 defaults delete com.bellowflo.app
+rm -rf ~/Library/Application\ Support/Bellow\ Flo   # config, dictionary, models
 # remove the hook snippets from ~/.claude/settings.json, ~/.codex/config.toml
 # and ~/.cursor/hooks.json, then delete this repo folder
 ```

@@ -1,47 +1,56 @@
-#!/bin/bash
-# Store an API key for Bellow Flo in the macOS Keychain.
-#
-# The key is typed straight into `security`, which prompts for it without
-# echoing and without it ever appearing in a command line, a shell history,
-# a config file or a log.
-set -euo pipefail
+#!/usr/bin/env python3
+"""Store an API key for Bellow Flo in the system's credential store.
 
-case "${1:-}" in
-  anthropic) svc=bellowflo-anthropic; label="Anthropic (Claude)"; prefix="sk-ant-" ;;
-  openai)    svc=bellowflo-openai; label="OpenAI (ChatGPT)";   prefix="sk-" ;;
-  *) echo "usage: bellowflo-set-key anthropic|openai"; exit 1 ;;
-esac
+  bellowflo-set-key anthropic|openai
 
-echo "Storing an API key for $label."
-echo "Paste it at the prompt below — it will not be shown as you type."
-security add-generic-password -U -a bellow-flo -s "$svc" -w
+macOS: the key is typed straight into `security`, which prompts for it
+without echoing, so it never appears in a command line, a shell history, a
+config file, a log, or this process. Windows: typed at a hidden prompt and
+written to Credential Manager.
+"""
+import os
+import sys
 
-# Report the shape of what landed, without ever showing it. Deliberately
-# no expected-length check: key formats and lengths change between
-# providers and over time, so a length rule mostly manufactures false
-# "your key is truncated" diagnoses. Only whitespace and a wrong prefix
-# are reliable signals of a bad paste.
-stored=$(security find-generic-password -a bellow-flo -s "$svc" -w 2>/dev/null || true)
-len=${#stored}
-echo ""
-echo "Saved to your Keychain ($len characters)."
+HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+import bf_secrets  # noqa: E402
 
-if [ "$len" -eq 0 ]; then
-  echo "WARNING: nothing was stored."
-  exit 1
-fi
-case "$stored" in
-  "$prefix"*) ;;
-  *) echo "WARNING: does not start with '$prefix' — is this the right key?" ;;
-esac
-case "$stored" in
-  *[[:space:]]*)
-    echo "WARNING: the stored value contains a space or line break, which"
-    echo "means the paste picked up surrounding text. Re-run and paste only"
-    echo "the key."
-    ;;
-esac
-echo "Bellow Flo will read it from the Keychain when it needs it."
-echo "If the provider rejects it, the likeliest causes are that the key was"
-echo "revoked, belongs to a different account, or that the account has no"
-echo "credits — not that it was mistyped."
+PROVIDERS = {"anthropic": ("Anthropic (Claude)", "sk-ant-"),
+             "openai": ("OpenAI (ChatGPT)", "sk-")}
+
+
+def main():
+    provider = sys.argv[1] if len(sys.argv) > 1 else ""
+    if provider not in PROVIDERS:
+        sys.exit("usage: bellowflo-set-key anthropic|openai")
+    label, prefix = PROVIDERS[provider]
+    print(f"Storing an API key for {label}.")
+    print("Paste it at the prompt below — it will not be shown as you type.")
+    try:
+        bf_secrets.prompt_and_store(provider)
+    except Exception as e:
+        sys.exit(f"Not stored: {e}")
+
+    # Report the shape of what landed, without ever showing it. Deliberately
+    # no expected-length check: key formats and lengths change between
+    # providers and over time, so a length rule mostly manufactures false
+    # "your key is truncated" diagnoses. Only whitespace and a wrong prefix
+    # are reliable signals of a bad paste.
+    stored = bf_secrets.get(provider)
+    print(f"\nSaved ({len(stored)} characters).")
+    if not stored:
+        sys.exit("WARNING: nothing was stored.")
+    if not stored.startswith(prefix):
+        print(f"WARNING: does not start with '{prefix}' — is this the right key?")
+    if any(c.isspace() for c in stored):
+        print("WARNING: the stored value contains a space or line break, which\n"
+              "means the paste picked up surrounding text. Re-run and paste only\n"
+              "the key.")
+    print("Bellow Flo will read it from there when it needs it.\n"
+          "If the provider rejects it, the likeliest causes are that the key was\n"
+          "revoked, belongs to a different account, or that the account has no\n"
+          "credits — not that it was mistyped.")
+
+
+if __name__ == "__main__":
+    main()

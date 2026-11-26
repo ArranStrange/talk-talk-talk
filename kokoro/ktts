@@ -15,63 +15,49 @@
 Voice/speed via env: KOKORO_VOICE, KOKORO_SPEED, KOKORO_LANG
 Uses only the standard library; the daemon it launches runs in ./venv.
 """
-import json
 import os
-import socket
 import subprocess
 import sys
 import time
 
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
-SOCK_PATH = os.path.join(HERE, "daemon.sock")
-CONFIG_PATH = os.path.join(HERE, "config.json")
-VENV_PYTHON = os.path.join(HERE, "venv", "bin", "python")
+sys.path.insert(0, HERE)
+import bf_ipc    # noqa: E402
+import bf_paths  # noqa: E402
 
 
 def config():
     """Persisted defaults (written by the menu bar); env vars win."""
-    try:
-        with open(CONFIG_PATH) as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def connect():
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(SOCK_PATH)
-    return s
+    return bf_paths.load_config()
 
 
 def ensure_daemon():
-    try:
-        connect().close()
+    if bf_ipc.alive():
         return
-    except OSError:
-        pass
-    if not os.path.exists(VENV_PYTHON):
-        sys.exit(f"venv missing at {VENV_PYTHON} — run install.sh first")
-    log = open(os.path.join(HERE, "daemon.log"), "ab")
-    subprocess.Popen(
-        [VENV_PYTHON, os.path.join(HERE, "daemon.py")],
-        stdout=log, stderr=log, start_new_session=True,
-    )
+    python = bf_paths.venv_python()
+    if not os.path.exists(python):
+        sys.exit(f"venv missing at {python} — run install.sh first")
+    bf_paths.ensure()
+    log = open(bf_paths.DAEMON_LOG, "ab")
+    if os.name == "nt":
+        detach = {"creationflags": subprocess.DETACHED_PROCESS
+                  | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
+    else:
+        detach = {"start_new_session": True}
+    # -X utf8: on Windows the default code page cannot encode much of what
+    # gets spoken, and the daemon's files and log must be UTF-8 everywhere.
+    subprocess.Popen([python, "-X", "utf8", os.path.join(HERE, "daemon.py")],
+                     stdout=log, stderr=log, stdin=subprocess.DEVNULL, **detach)
     for _ in range(120):  # up to 30s for a cold start
         time.sleep(0.25)
-        try:
-            connect().close()
+        if bf_ipc.alive():
             return
-        except OSError:
-            continue
-    sys.exit("kokoro daemon failed to start; see daemon.log")
+    sys.exit(f"kokoro daemon failed to start; see {bf_paths.DAEMON_LOG}")
 
 
 def send(req):
     ensure_daemon()
-    s = connect()
-    s.sendall(json.dumps(req).encode())
-    reply = json.loads(s.recv(1 << 16).decode())
-    s.close()
+    reply = bf_ipc.request(req)
     print(reply.get("msg", ""))
     sys.exit(0 if reply.get("ok") else 1)
 
@@ -99,7 +85,13 @@ def main():
         else:
             say(" ".join(rest))
     elif cmd == "clip":
-        text = subprocess.run(["pbpaste"], capture_output=True, text=True).stdout
+        if os.name == "nt":
+            cmd = ["powershell", "-NoProfile", "-Command",
+                   "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw"]
+        else:
+            cmd = ["pbpaste"]
+        text = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace").stdout
         say(text)
     elif cmd == "back":
         seconds = float(args[1]) if len(args) > 1 else 10.0
@@ -107,9 +99,7 @@ def main():
     elif cmd in ("stop", "pause", "resume", "toggle", "status", "quit"):
         if cmd in ("stop", "status", "quit"):
             # don't boot a daemon just to ask it something / stop nothing
-            try:
-                connect().close()
-            except OSError:
+            if not bf_ipc.alive():
                 print("idle" if cmd == "status" else "not running")
                 sys.exit(0)
         send({"cmd": cmd})

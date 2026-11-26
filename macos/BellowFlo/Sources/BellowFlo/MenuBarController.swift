@@ -191,7 +191,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             Config.set("dictation_paste", now)
         }
         add(dictMenu, "Edit dictionary…") {
-            let p = Paths.kokoroDir + "/dictionary.txt"
+            let p = Paths.dictionary
             if !FileManager.default.fileExists(atPath: p) {
                 Paths.write("# One term per line. The cleanup model spells these exactly.\n"
                             + "# Names, products, jargon — anything it keeps getting wrong.\n",

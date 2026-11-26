@@ -4,6 +4,7 @@ import AppKit
 /// ~/Applications is still clickable from the Dock to launch it.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Paths.ensureDataDir()
         Coordinator.shared.start()
     }
 

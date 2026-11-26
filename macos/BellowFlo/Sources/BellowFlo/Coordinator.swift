@@ -45,7 +45,7 @@ final class Coordinator {
 
         Log.write("started: hotkeys=\(Hotkeys.shared.count)/7 "
                   + "accessibility=\(Selection.isTrusted) "
-                  + "engine=\(Paths.kokoroDir) "
+                  + "engine=\(Paths.kokoroDir) data=\(Paths.dataDir) "
                   + "menubar=\(menu != nil) state=\(state)")
 
         if !Selection.isTrusted {

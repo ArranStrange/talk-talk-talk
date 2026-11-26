@@ -30,15 +30,10 @@ import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(HERE, "config.json")
+sys.path.insert(0, HERE)
+import bf_paths    # noqa: E402
+import bf_secrets  # noqa: E402
 
-# (account, service) pairs, newest first. The second pair is the name the app
-# had before it became Bellow Flo, so a key stored back then still works.
-KEYCHAIN_ENTRIES = {
-    "anthropic": [("bellow-flo", "bellowflo-anthropic"), ("talk-talk-talk", "ttt-anthropic")],
-    "openai": [("bellow-flo", "bellowflo-openai"), ("talk-talk-talk", "ttt-openai")],
-}
-ENV_VAR = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 DEFAULT_MIN_WORDS = 70  # roughly a short paragraph; below this, don't bother
 DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5-20251001",
@@ -48,26 +43,13 @@ DEFAULT_MODEL = {
 
 
 def config():
-    try:
-        with open(CONFIG_PATH) as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
+    return bf_paths.load_config()
 
 
 def api_key(provider):
-    """Keychain first, then the environment. Never logged, never stored."""
-    for account, service in KEYCHAIN_ENTRIES.get(provider, []):
-        try:
-            out = subprocess.run(
-                ["security", "find-generic-password",
-                 "-a", account, "-s", service, "-w"],
-                capture_output=True, text=True, timeout=10)
-            if out.returncode == 0 and out.stdout.strip():
-                return out.stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            pass
-    return os.environ.get(ENV_VAR.get(provider, ""), "").strip()
+    """The OS credential store first, then the environment. Never logged,
+    never stored."""
+    return bf_secrets.get(provider)
 
 
 def prompt_for(text, sentences):

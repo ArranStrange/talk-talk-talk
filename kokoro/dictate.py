@@ -1,10 +1,11 @@
 """Dictation engine: speech to text, then a small language model tidies it.
 
-Two models, both open and both resident once loaded:
+Two models, both open and both resident once loaded, run through MLX on
+Apple Silicon or ONNX/llama.cpp elsewhere (dictate_backends.py):
 
-  Parakeet TDT 0.6B v3 (NVIDIA, CC-BY-4.0) via parakeet-mlx — transcription
-      with punctuation and capitalisation built in.
-  Qwen3 4B Instruct (Alibaba, Apache 2.0) via mlx-lm — removes fillers and
+  Parakeet TDT 0.6B v3 (NVIDIA, CC-BY-4.0) — transcription with
+      punctuation and capitalisation built in.
+  Qwen3 4B Instruct (Alibaba, Apache 2.0) — removes fillers and
       false starts, applies the personal dictionary, fixes what the
       transcriber got wrong. This step is what makes dictation feel like
       writing rather than a transcript.
@@ -17,9 +18,9 @@ goes down so loading overlaps with speaking) and unload after a period of
 idleness so 3-4 GB is not held for a feature used a few times an hour.
 """
 import gc
-import json
 import os
 import re
+import sys
 import threading
 import time
 import wave
@@ -27,28 +28,22 @@ import wave
 import numpy as np
 
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(HERE, "config.json")
-DICTIONARY_PATH = os.path.join(HERE, "dictionary.txt")
-VAD_PATH = os.path.join(HERE, "silero_vad.onnx")
+sys.path.insert(0, HERE)
+import bf_paths          # noqa: E402
+import dictate_backends  # noqa: E402
 
-DEFAULT_STT = "mlx-community/parakeet-tdt-0.6b-v3"
-DEFAULT_CLEANUP = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 DEFAULT_IDLE_MINUTES = 10
 DEFAULT_CLEANUP_MIN_WORDS = 4     # shorter than this is pasted as transcribed
 SR = 16000
 
 
 def _config():
-    try:
-        with open(CONFIG_PATH) as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
+    return bf_paths.load_config()
 
 
 def _dictionary():
     try:
-        with open(DICTIONARY_PATH) as f:
+        with open(bf_paths.DICTIONARY, encoding="utf-8") as f:
             return [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
     except OSError:
         return []
@@ -76,7 +71,8 @@ class Vad:
             opts.inter_op_num_threads = 1
             opts.intra_op_num_threads = 1
             self.session = ort.InferenceSession(
-                VAD_PATH, opts, providers=["CPUExecutionProvider"])
+                bf_paths.model("silero_vad.onnx"), opts,
+                providers=["CPUExecutionProvider"])
         except Exception:
             self.session = None
 
@@ -128,19 +124,17 @@ class Vad:
 class Engine:
     def __init__(self):
         self.lock = threading.Lock()
-        self.stt = None
-        self.llm = None
-        self.tok = None
+        self.backend = dictate_backends.choose(_config())
         self.vad = Vad()
-        # KV cache of the system prompt, keyed by its text (it varies with the
-        # app being pasted into and the dictionary). Measured: processing the
-        # 347-token prefix cost ~0.9-1.3 s of every cleanup; with the cache
-        # only the transcript's ~50 tokens are processed, ~0.3 s.
-        self._prefix = {}          # rules text -> (token ids, filled cache)
-        self._prefix_order = []    # for a small LRU
+        self._stt_warm = False
         self.last_used = 0.0
         self.load_lock = threading.Lock()
+        # One generation at a time: a key-down primes the prompt cache while
+        # the previous cleanup may still be running, and a llama.cpp context
+        # is not safe to share between threads.
+        self.llm_lock = threading.Lock()
         threading.Thread(target=self._idle_watch, daemon=True).start()
+        print(f"dictation: using the {self.backend.name} backend", flush=True)
 
     # -- loading -----------------------------------------------------------
 
@@ -155,96 +149,47 @@ class Engine:
         # A blocking lock, not a flag: the app warms on key-down and asks
         # for the transcript on key-up, and if the load is still running at
         # that point the transcript must wait for it, not be dropped.
+        b = self.backend
         with self.load_lock:
             cfg = _config()
             if need_llm is None:
                 need_llm = bool(cfg.get("dictation_cleanup", True))
-            if self.stt is None:
-                from parakeet_mlx import from_pretrained
-                t = time.time()
-                self.stt = from_pretrained(cfg.get("stt_model") or DEFAULT_STT)
-                # MLX arrays are lazy. Evaluate the weights here, in the
-                # thread that loaded them, rather than letting the first
-                # transcription materialise them from another thread.
-                import mlx.core as mx
-                mx.eval(self.stt.parameters())
-                print(f"dictation: transcriber loaded in {time.time()-t:.1f}s", flush=True)
-            if self.llm is None and need_llm:
+            if not b.stt_loaded:
+                b.load_stt(cfg)
+            if not b.llm_loaded and need_llm:
                 try:
-                    from mlx_lm import load
-                    t = time.time()
-                    self.llm, self.tok = load(cfg.get("cleanup_model") or DEFAULT_CLEANUP)
-                    import mlx.core as mx
-                    mx.eval(self.llm.parameters())      # same cross-thread rule as above
-                    print(f"dictation: cleanup model loaded in {time.time()-t:.1f}s", flush=True)
+                    b.load_llm(cfg)
                 except Exception as e:
-                    self.llm = self.tok = None
                     print(f"dictation: cleanup model unavailable, using raw "
                           f"transcripts: {str(e).splitlines()[0][:160]}", flush=True)
             # Warm-up: the first transcription and first generation after a
             # load each pay ~1 s of kernel compilation. Spend it now, while
             # the key is still held, rather than on the user's first sentence.
-            if self.stt is not None and not getattr(self, "_stt_warm", False):
+            if b.stt_loaded and not self._stt_warm:
                 try:
-                    self._transcribe_samples(np.zeros(SR // 2, dtype=np.float32))
+                    b.transcribe(np.zeros(SR // 2, dtype=np.float32))
                     self._stt_warm = True
                 except Exception:
                     pass
-            if self.llm is not None:
+            if b.llm_loaded:
                 try:
-                    self._prefix_for(context)      # builds the cache; compiles kernels
+                    with self.llm_lock:
+                        b.prime(self._system_rules(context))
                 except Exception as e:
                     print(f"dictation: prefix cache failed: {e}", flush=True)
         self.last_used = time.time()
 
-    def _prefix_for(self, context):
-        """(prefix token ids, KV cache) for the system prompt of `context`.
-
-        Built once per distinct rules text and reused; a small LRU because
-        the set of apps dictated into is small.
-        """
-        import copy
-        import mlx.core as mx
-        from mlx_lm.models.cache import make_prompt_cache
-        rules = self._system_rules(context)
-        hit = self._prefix.get(rules)
-        if hit is None:
-            marker = " MARK "
-            with_marker = self._chat(rules, marker)
-            prefix_text = with_marker[:with_marker.index(marker)]
-            ids = self.tok.encode(prefix_text)
-            cache = make_prompt_cache(self.llm)
-            t = time.time()
-            self.llm(mx.array(ids)[None], cache=cache)
-            mx.eval([c.state for c in cache])
-            hit = (ids, cache)
-            self._prefix[rules] = hit
-            self._prefix_order.append(rules)
-            if len(self._prefix_order) > 8:
-                self._prefix.pop(self._prefix_order.pop(0), None)
-            print(f"dictation: cached {len(ids)}-token prompt prefix in "
-                  f"{(time.time()-t)*1000:.0f} ms", flush=True)
-        ids, cache = hit
-        return ids, copy.deepcopy(cache)   # generation mutates the cache
-
     @property
     def transcriber_loaded(self):
-        return self.stt is not None
+        return self.backend.stt_loaded
 
     def unload(self):
         with self.lock:
-            had = self.stt is not None or self.llm is not None
-            self.stt = self.llm = self.tok = None
-            self._prefix.clear()
-            self._prefix_order.clear()
+            had = self.backend.stt_loaded or self.backend.llm_loaded
+            self.backend.unload()
             self._stt_warm = False
         if had:
             gc.collect()
-            try:
-                import mlx.core as mx
-                mx.clear_cache()
-            except Exception:
-                pass
             print("dictation: models unloaded", flush=True)
         return had
 
@@ -254,7 +199,7 @@ class Engine:
             minutes = float(_config().get("dictation_idle_unload_min") or DEFAULT_IDLE_MINUTES)
             if minutes <= 0:
                 continue
-            if (self.stt or self.llm) and time.time() - self.last_used > minutes * 60:
+            if (self.backend.stt_loaded or self.backend.llm_loaded) and time.time() - self.last_used > minutes * 60:
                 self.unload()
 
     # -- the pipeline ------------------------------------------------------
@@ -274,11 +219,11 @@ class Engine:
             self.warm(need_llm=cleanup, context=context)   # same prefix the cleanup will use
         except Exception as e:
             return {"ok": False, "msg": f"transcriber failed to load: {str(e).splitlines()[0][:160]}"}
-        if self.stt is None:
+        if not self.backend.stt_loaded:
             return {"ok": False, "msg": "transcriber is still loading"}
         timings = {}
         t = time.time()
-        raw = self._transcribe_samples(trimmed)
+        raw = self.backend.transcribe(trimmed)
         timings["stt"] = int((time.time() - t) * 1000)
         if not raw:
             return {"ok": False, "msg": "nothing was said"}
@@ -287,7 +232,7 @@ class Engine:
         # A one- or two-word dictation ("yes please", "on it") has nothing to
         # clean and should paste instantly rather than wait for the model.
         min_words = int(_config().get("dictation_cleanup_min_words") or DEFAULT_CLEANUP_MIN_WORDS)
-        if cleanup and self.llm is not None and len(raw.split()) >= min_words:
+        if cleanup and self.backend.llm_loaded and len(raw.split()) >= min_words:
             t = time.time()
             cleaned = self._cleanup(raw, context)
             timings["cleanup"] = int((time.time() - t) * 1000)
@@ -296,17 +241,6 @@ class Engine:
         self.last_used = time.time()
         return {"ok": True, "text": text, "raw": raw, "ms": timings,
                 "seconds": round(len(trimmed) / SR, 1)}
-
-    def _transcribe_samples(self, samples):
-        """Feed the model directly. Its transcribe(path) decodes files with
-        FFmpeg, which is a large dependency for a WAV we already hold as an
-        array; the log-mel front end and generate() are what it does next."""
-        import mlx.core as mx
-        from parakeet_mlx.audio import get_logmel
-        mel = get_logmel(mx.array(samples.astype(np.float32)),
-                         self.stt.preprocessor_config)
-        result = self.stt.generate(mel)[0]
-        return (getattr(result, "text", "") or "").strip()
 
     # Spoken layout commands, handled in code rather than left to the model:
     # a rule that fires every time beats one that fires most of the time.
@@ -370,42 +304,11 @@ class Engine:
             rules.append(f"The text will be pasted into {context}.")
         return "\n".join(rules)
 
-    def _chat(self, rules, user):
-        messages = [{"role": "system", "content": rules},
-                    {"role": "user", "content": user}]
-        try:
-            return self.tok.apply_chat_template(
-                messages, add_generation_prompt=True, tokenize=False,
-                enable_thinking=False)
-        except TypeError:
-            return self.tok.apply_chat_template(
-                messages, add_generation_prompt=True, tokenize=False)
-
-    def build_prompt(self, raw, context):
-        return self._chat(self._system_rules(context), raw)
-
     def _cleanup(self, raw, context):
-        from mlx_lm import stream_generate
         raw = self.apply_spoken_formatting(raw)
-        full_ids = self.tok.encode(self.build_prompt(raw, context))
         max_tokens = min(2048, max(64, int(len(raw.split()) * 3)))
-        prompt_ids, cache = full_ids, None
-        try:
-            prefix_ids, cache = self._prefix_for(context)
-            if full_ids[:len(prefix_ids)] == prefix_ids:
-                prompt_ids = full_ids[len(prefix_ids):]
-            else:
-                cache = None            # tokeniser merged across the boundary; go uncached
-        except Exception as e:
-            print(f"dictation: prefix cache unavailable: {e}", flush=True)
-            cache = None
-        pieces = []
-        for r in stream_generate(self.llm, self.tok, prompt_ids,
-                                 max_tokens=max_tokens, prompt_cache=cache):
-            pieces.append(r.text)
-            if r.finish_reason:
-                break
-        out = "".join(pieces).strip()
+        with self.llm_lock:
+            out = self.backend.clean(self._system_rules(context), raw, max_tokens).strip()
         # trailing spaces before line breaks are a model tic, not formatting
         out = "\n".join(line.rstrip() for line in out.splitlines()).strip()
         # strip a stray thinking block or code fence if the model insisted
@@ -433,23 +336,19 @@ class Engine:
         test set.
         """
         import difflib
-        import mlx.core as mx
-        from parakeet_mlx.audio import get_logmel
         if load:
             self.warm(need_llm=False)
-        if self.stt is None or not words:
+        if not self.backend.stt_loaded or not words:
             return None
         n = int(round(len(samples_24k) * SR / 24000))
         s16 = np.interp(np.linspace(0, len(samples_24k) - 1, n),
                         np.arange(len(samples_24k)), samples_24k).astype(np.float32)
-        result = self.stt.generate(get_logmel(mx.array(s16), self.stt.preprocessor_config))[0]
         heard = []                       # [text, start], subword tokens merged
-        for sent in result.sentences:
-            for tk in sent.tokens:
-                if tk.text.startswith(" ") or not heard:
-                    heard.append([tk.text.strip(), float(tk.start)])
-                else:
-                    heard[-1][0] += tk.text
+        for text, start in self.backend.tokens(s16):
+            if text.startswith(" ") or not heard:
+                heard.append([text.strip(), start])
+            else:
+                heard[-1][0] += text
         a = [self._norm_word(w) for w in words]
         b = [self._norm_word(w) for w, _ in heard]
         starts = [None] * len(words)

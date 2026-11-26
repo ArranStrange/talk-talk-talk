@@ -61,7 +61,7 @@ final class DictationController {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil; source = nil
-        if recorder.isRecording { _ = recorder.stop(to: Paths.kokoroDir + "/dictation.wav") }
+        if recorder.isRecording { _ = recorder.stop(to: Paths.dictation) }
     }
 
     /// Restart after the key choice changes.
@@ -118,7 +118,7 @@ final class DictationController {
 
     private func keyUp() {
         guard recorder.isRecording else { return }
-        let path = Paths.kokoroDir + "/dictation.wav"
+        let path = Paths.dictation
         guard let rec = recorder.stop(to: path), rec.seconds >= minimumHold else {
             finish(nil, silent: true)
             return

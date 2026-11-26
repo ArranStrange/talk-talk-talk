@@ -41,7 +41,7 @@ final class StateWatcher {
                                              | kFSEventStreamCreateFlagNoDefer
                                              | kFSEventStreamCreateFlagUseCFTypes)
         stream = FSEventStreamCreate(nil, callback, &ctx,
-                                     [Paths.kokoroDir] as CFArray,
+                                     [Paths.dataDir] as CFArray,
                                      FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
                                      0.02, flags)
         guard let stream else { return }

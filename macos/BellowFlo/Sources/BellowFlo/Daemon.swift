@@ -42,7 +42,7 @@ enum Daemon {
         // Same destination ktts uses. Discarding this output hid every
         // underrun and device message the daemon printed, which turned a
         // "why is it glitchy" question into guesswork.
-        let logPath = Paths.kokoroDir + "/daemon.log"
+        let logPath = Paths.daemonLog
         if !FileManager.default.fileExists(atPath: logPath) {
             FileManager.default.createFile(atPath: logPath, contents: nil)
         }

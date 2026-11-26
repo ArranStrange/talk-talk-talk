@@ -22,12 +22,14 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+import bf_paths  # noqa: E402
 
 
 def last_assistant_text(transcript_path):
     text = None
     try:
-        with open(transcript_path) as f:
+        with open(transcript_path, encoding="utf-8") as f:
             for line in f:
                 try:
                     entry = json.loads(line)
@@ -153,11 +155,7 @@ def maybe_summarise(text):
     Runs here rather than in the UI because the hook is already async, so a
     slow provider delays only the spoken summary, never the agent.
     """
-    try:
-        with open(os.path.join(HERE, "config.json")) as f:
-            cfg = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return text
+    cfg = bf_paths.load_config()
     if not cfg.get("tldr_replies"):
         return text
     # Same threshold tldr.py uses, checked here too so a short reply does
@@ -167,15 +165,13 @@ def maybe_summarise(text):
     # Surface the wait: a provider can take tens of seconds, and without
     # this the pill stays blank and the delay looks like nothing happening.
     try:
-        tmp = os.path.join(HERE, "state.tmp")
-        with open(tmp, "w") as f:
-            f.write("summarising")
-        os.replace(tmp, os.path.join(HERE, "state"))
+        bf_paths.write_atomic(bf_paths.STATE, "summarising")
     except OSError:
         pass
     try:
         out = subprocess.run(
-            [os.path.join(HERE, "tldr.py")],
+            # through the interpreter: Windows does not honour shebangs
+            [sys.executable, os.path.join(HERE, "tldr.py")],
             input=text, capture_output=True, text=True, timeout=180)
         summary = out.stdout.strip()
         if out.returncode == 0 and summary:
@@ -196,16 +192,14 @@ def stage(text):
     max_chars = int(os.environ.get("KOKORO_MAX", "0"))
     if max_chars and len(text) > max_chars:
         text = text[:max_chars].rsplit(" ", 1)[0] + " ... response truncated."
-    with open(os.path.join(HERE, "pending.txt"), "w") as f:
+    bf_paths.ensure()
+    with open(bf_paths.PENDING, "w", encoding="utf-8") as f:
         f.write(text)
     try:  # a stale word must not linger under a new reply
-        open(os.path.join(HERE, "word"), "w").close()
+        open(bf_paths.WORD, "w").close()
     except OSError:
         pass
-    state_tmp = os.path.join(HERE, "state.tmp")
-    with open(state_tmp, "w") as f:
-        f.write("ready")
-    os.replace(state_tmp, os.path.join(HERE, "state"))
+    bf_paths.write_atomic(bf_paths.STATE, "ready")
 
 
 def main():
