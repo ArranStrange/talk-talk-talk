@@ -12,8 +12,10 @@ enum Look {
         "summarising":  NSColor(srgbRed: 0.62, green: 0.45, blue: 0.95, alpha: 1),
         "listening":    NSColor(srgbRed: 0.95, green: 0.30, blue: 0.30, alpha: 1),
         "transcribing": NSColor(srgbRed: 0.95, green: 0.60, blue: 0.10, alpha: 1),
+        "downloading":  NSColor(srgbRed: 0.95, green: 0.60, blue: 0.10, alpha: 1),
     ]
     static let label: [String: String] = [
+        "downloading": "Downloading voices…",
         "loading": "Loading model…", "synthesizing": "Preparing…",
         "playing": "Speaking", "paused": "Paused",
         "ready": "Agent replied", "summarising": "Summarising…",

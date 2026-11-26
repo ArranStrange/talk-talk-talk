@@ -1,0 +1,13 @@
+# The engine's packages in the macOS app (Apple Silicon). Exact versions:
+# these are the ones the release was tested with.
+kokoro-onnx==0.6.1
+onnxruntime==1.32.0
+numpy==2.5.5
+espeakng-loader==0.2.4
+soundfile==0.14.0
+sounddevice==0.5.6
+huggingface_hub==2.4.0
+# dictation (MLX on the GPU)
+parakeet-mlx==0.7.0
+mlx==0.32.5
+mlx-lm==0.32.2

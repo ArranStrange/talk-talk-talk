@@ -134,9 +134,10 @@ static class Daemon
             psi.ArgumentList.Add("utf8");
             psi.ArgumentList.Add(Paths.DaemonScript);
             psi.ArgumentList.Add("--log");
+            Process? p;
             try
             {
-                using var p = Process.Start(psi);
+                p = Process.Start(psi);
                 Log.Write($"started daemon pid {p?.Id}");
             }
             catch (Exception e)
@@ -144,12 +145,25 @@ static class Daemon
                 Log.Write($"could not start the daemon: {e.Message}");
                 return false;
             }
-            for (int i = 0; i < 300; i++)        // up to 30 s: a first run loads the model
+            using (p)
             {
-                Thread.Sleep(100);
-                if (Alive()) return true;
+                // 30 s for a model load, or as long as the engine reports a
+                // first-run model download, which can take minutes.
+                var began = Stopwatch.StartNew();
+                while (true)
+                {
+                    Thread.Sleep(100);
+                    if (Alive()) return true;
+                    if (p == null || p.HasExited)
+                    {
+                        Log.Write($"daemon exited ({p?.ExitCode}); see daemon.log");
+                        return false;
+                    }
+                    bool downloading = Paths.Read(Paths.State).Trim() == "downloading";
+                    if (began.Elapsed > (downloading ? TimeSpan.FromMinutes(30) : TimeSpan.FromSeconds(30))) break;
+                }
             }
-            Log.Write("daemon did not answer within 30 s; see daemon.log");
+            Log.Write("daemon did not answer in time; see daemon.log");
             return false;
         }
     }
@@ -193,13 +207,15 @@ static class Daemon
         });
     }
 
-    /// Send and hand the reply to `done` on the UI thread.
-    public static void Request(JsonObject request, Action<JsonObject?> done, bool boot = true)
+    /// Send and hand the reply to `done` on the UI thread. The default
+    /// timeout allows for a first dictation waiting on its model download.
+    public static void Request(JsonObject request, Action<JsonObject?> done, bool boot = true,
+                               int timeoutMs = 30 * 60 * 1000)
     {
         Queue.Add(() =>
         {
             JsonObject? reply = null;
-            try { reply = RoundTrip(request, boot, 120000); }
+            try { reply = RoundTrip(request, boot, timeoutMs); }
             finally
             {
                 if (ui != null) ui.Post(_ => done(reply), null); else done(reply);

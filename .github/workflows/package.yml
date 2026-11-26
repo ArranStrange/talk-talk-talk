@@ -1,0 +1,135 @@
+# Builds the installers for both platforms and tests them end to end.
+#   - pull requests, pushes to main, and by hand: build + test, installers
+#     as artifacts
+#   - a tag like v1.2.3: the same, then a GitHub release with both attached
+name: Package
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version
+        id: v
+        shell: pwsh
+        run: |
+          $v = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "0.0.0-ci.$env:GITHUB_RUN_NUMBER" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build the installer
+        shell: pwsh
+        env:
+          HF_HUB_DISABLE_XET: "1"
+        run: windows\package.ps1 -Version "${{ steps.v.outputs.version }}"
+
+      - name: Install it, silently, as a user would
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist -Filter "BellowFlo-*-windows-x64-setup.exe" | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          $app = "$env:LOCALAPPDATA\Programs\Bellow Flo"
+          if (-not (Test-Path "$app\BellowFlo.exe")) { throw "not installed" }
+          if (-not (Test-Path "$app\engine\runtime\python.exe")) { throw "no engine runtime" }
+          "{0:N0} MB installed" -f ((Get-ChildItem $app -Recurse | Measure-Object Length -Sum).Sum / 1MB)
+
+      - name: Smoke test the installed engine
+        shell: pwsh
+        env:
+          HF_HUB_DISABLE_XET: "1"
+        run: |
+          $engine = "$env:LOCALAPPDATA\Programs\Bellow Flo\engine"
+          & "$engine\runtime\python.exe" -X utf8 packaging\smoke_test.py $engine --cleanup
+          if ($LASTEXITCODE -ne 0) { throw "smoke test failed" }
+
+      - name: Launch the installed app
+        shell: pwsh
+        run: |
+          $p = Start-Process "$env:LOCALAPPDATA\Programs\Bellow Flo\BellowFlo.exe" -PassThru
+          Start-Sleep 15
+          $log = "$env:LOCALAPPDATA\Bellow Flo\BellowFlo.log"
+          if (Test-Path $log) { Get-Content $log } else { throw "the app wrote no log" }
+          if ($p.HasExited) { throw "the app exited with $($p.ExitCode)" }
+          if (-not (Select-String -Path $log -Pattern "started: hotkeys=" -Quiet)) { throw "the app did not finish starting" }
+          if (Select-String -Path $log -Pattern "unhandled|fatal" -Quiet) { throw "the app logged an exception" }
+          Stop-Process -Id $p.Id
+
+      - name: Uninstall cleanly
+        shell: pwsh
+        run: |
+          $un = "$env:LOCALAPPDATA\Programs\Bellow Flo\unins000.exe"
+          Start-Process $un -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait
+          Start-Sleep 3
+          if (Test-Path "$env:LOCALAPPDATA\Programs\Bellow Flo\BellowFlo.exe") { throw "uninstall left the app behind" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/BellowFlo-*-windows-x64-setup.exe
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version
+        id: v
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="$GITHUB_REF_NAME"; else v="0.0.0-ci.$GITHUB_RUN_NUMBER"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build the DMG
+        run: macos/package.sh "${{ steps.v.outputs.version }}"
+
+      - name: Smoke test the bundled engine
+        env:
+          HF_HUB_DISABLE_XET: "1"
+        run: |
+          ENGINE="dist/macos/Bellow Flo.app/Contents/Resources/engine"
+          "$ENGINE/runtime/bin/python3" -X utf8 packaging/smoke_test.py "$ENGINE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/BellowFlo-*-macos-arm64.dmg
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" \
+            --title "Bellow Flo $GITHUB_REF_NAME" --generate-notes

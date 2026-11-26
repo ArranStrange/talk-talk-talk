@@ -52,6 +52,25 @@ def _log(msg):
     print(f"dictation: {msg}", flush=True)
 
 
+def _snapshot_cached(repo):
+    """Is a copy of this Hugging Face repo already on disk? No network."""
+    from huggingface_hub import snapshot_download
+    try:
+        snapshot_download(repo, local_files_only=True)
+        return True
+    except Exception:
+        return False
+
+
+def _file_cached(repo, filename):
+    from huggingface_hub import hf_hub_download
+    try:
+        hf_hub_download(repo, filename, local_files_only=True)
+        return True
+    except Exception:
+        return False
+
+
 # --------------------------------------------------------------------------
 # MLX (Apple Silicon)
 # --------------------------------------------------------------------------
@@ -98,6 +117,13 @@ class MlxBackend:
             self.llm = self.tok = None
             raise
         _log(f"cleanup model loaded in {time.time()-t:.1f}s (mlx)")
+
+    def cached(self, cfg, need_llm):
+        """True if loading needs no download."""
+        ok = _snapshot_cached(cfg.get("stt_model") or MLX_STT)
+        if need_llm:
+            ok = ok and _snapshot_cached(cfg.get("cleanup_model") or MLX_CLEANUP)
+        return ok
 
     def unload(self):
         self.stt = self.llm = self.tok = None
@@ -230,6 +256,25 @@ class OnnxBackend:
         # Metal); a CPU-only build ignores it.
         self.llm = Llama(model_path=path, n_ctx=4096, n_gpu_layers=-1, verbose=False)
         _log(f"cleanup model loaded in {time.time()-t:.1f}s (llama.cpp)")
+
+    # onnx-asr's names for the Hugging Face repos it downloads from. It
+    # fetches only the int8 files, so check for those, not the whole repo.
+    _STT_FILES = {"nemo-parakeet-tdt-0.6b-v3": (
+        "istupakov/parakeet-tdt-0.6b-v3-onnx",
+        ("encoder-model.int8.onnx", "decoder_joint-model.int8.onnx", "vocab.txt"))}
+
+    def cached(self, cfg, need_llm):
+        """True if loading needs no download."""
+        name = cfg.get("stt_model_onnx") or ONNX_STT
+        if name in self._STT_FILES:
+            repo, files = self._STT_FILES[name]
+            ok = all(_file_cached(repo, f) for f in files)
+        else:
+            ok = _snapshot_cached(name)
+        if need_llm:
+            repo, filename = cfg.get("cleanup_model_gguf") or ONNX_CLEANUP
+            ok = ok and _file_cached(repo, filename)
+        return ok
 
     def unload(self):
         self.stt = self.stt_ts = self.llm = None

@@ -17,6 +17,7 @@
     <Product>Bellow Flo</Product>
     <Version>0.1.0</Version>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <ApplicationIcon>BellowFlo.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

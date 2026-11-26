@@ -40,14 +40,17 @@ static class Paths
             Environment.SpecialFolder.LocalApplicationData), "Bellow Flo");
     }
 
-    /// The interpreter the daemon and tldr.py run under. BELLOWFLO_PYTHON
-    /// wins (a packaged build points it at a bundled runtime).
+    /// The interpreter the daemon and tldr.py run under: BELLOWFLO_PYTHON,
+    /// else the standalone runtime an installed build ships in
+    /// engine\runtime, else a source checkout's venv.
     public static string Python
     {
         get
         {
             var env = Environment.GetEnvironmentVariable("BELLOWFLO_PYTHON");
             if (!string.IsNullOrEmpty(env)) return env;
+            var runtime = Path.Combine(EngineDir, "runtime", "python.exe");
+            if (File.Exists(runtime)) return runtime;
             return Path.Combine(EngineDir, "venv", "Scripts", "python.exe");
         }
     }

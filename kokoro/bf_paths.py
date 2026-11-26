@@ -95,15 +95,24 @@ def load_config():
 
 
 def venv_python():
-    """The interpreter the daemon runs under. BELLOWFLO_PYTHON wins (a
-    packaged build points it at its bundled runtime); otherwise the venv the
-    installer made beside this file."""
+    """The interpreter the daemon runs under. BELLOWFLO_PYTHON wins; then the
+    runtime a packaged build ships beside this file (runtime/, a standalone
+    Python with the packages installed into it); then the venv a source
+    install makes."""
     override = os.environ.get("BELLOWFLO_PYTHON")
     if override:
         return override
     if sys.platform == "win32":
-        return os.path.join(ENGINE_DIR, "venv", "Scripts", "python.exe")
-    return os.path.join(ENGINE_DIR, "venv", "bin", "python")
+        candidates = [("runtime", "python.exe"), ("venv", "Scripts", "python.exe")]
+    else:
+        candidates = [("runtime", "bin", "python3"), ("venv", "bin", "python")]
+    paths = [os.path.join(ENGINE_DIR, *c) for c in candidates]
+    return next((p for p in paths if os.path.exists(p)), paths[-1])
+
+
+def missing_models():
+    """Model files neither the data folder nor the engine folder holds."""
+    return [n for n in MODEL_URLS if not os.path.exists(model(n))]
 
 
 def write_atomic(path, text):
