@@ -20,6 +20,7 @@ static class Look
         ["ready"] = C(0.30, 0.50, 0.95),
         ["listening"] = C(0.95, 0.30, 0.30),
         ["transcribing"] = C(0.95, 0.60, 0.10),
+        ["downloading"] = C(0.95, 0.60, 0.10),
     };
 
     /// The pill's mark, a touch brighter on its dark ground.
@@ -33,10 +34,12 @@ static class Look
         ["summarising"] = C(0.62, 0.45, 0.95),
         ["listening"] = C(0.95, 0.30, 0.30),
         ["transcribing"] = C(0.95, 0.60, 0.10),
+        ["downloading"] = C(0.95, 0.60, 0.10),
     };
 
     public static readonly Dictionary<string, string> PillLabel = new()
     {
+        ["downloading"] = "Downloading voices…",
         ["loading"] = "Loading model…", ["synthesizing"] = "Preparing…",
         ["playing"] = "Speaking", ["paused"] = "Paused",
         ["ready"] = "Agent replied", ["summarising"] = "Summarising…",
@@ -48,7 +51,7 @@ static class Look
         ["idle"] = "Idle", ["loading"] = "Loading model…", ["synthesizing"] = "Preparing…",
         ["playing"] = "Speaking", ["paused"] = "Paused", ["ready"] = "Reply ready",
         ["summarising"] = "Summarising…", ["listening"] = "Listening…",
-        ["transcribing"] = "Transcribing…",
+        ["transcribing"] = "Transcribing…", ["downloading"] = "Downloading voices (first run)…",
     };
 
     public static readonly Color On = Color.FromArgb(242, 64, 204, 89);

@@ -55,8 +55,15 @@ enum Daemon {
             p.standardError = FileHandle.nullDevice
         }
         do { try p.run() } catch { return false }
-        for _ in 0..<80 {                       // up to 8 s: first run loads the model
+        // Up to 8 s for a model load, or as long as the engine reports a
+        // first-run model download, which can take minutes on a slow line.
+        let began = Date()
+        while p.isRunning || connectFd() != nil {
             if let fd = connectFd() { close(fd); return true }
+            let downloading = Paths.read(Paths.state)
+                .trimmingCharacters(in: .whitespacesAndNewlines) == "downloading"
+            let limit: TimeInterval = downloading ? 30 * 60 : 8
+            if Date().timeIntervalSince(began) > limit { break }
             Thread.sleep(forTimeInterval: 0.1)
         }
         return false

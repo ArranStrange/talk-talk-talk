@@ -179,6 +179,19 @@ class Engine:
                     print(f"dictation: prefix cache failed: {e}", flush=True)
         self.last_used = time.time()
 
+    def needs_download(self, need_llm=None):
+        """True if the next load has to fetch models first: the first
+        dictation on a new install. Quick and offline."""
+        b = self.backend
+        if need_llm is None:
+            need_llm = bool(_config().get("dictation_cleanup", True))
+        if b.stt_loaded and (b.llm_loaded or not need_llm):
+            return False
+        try:
+            return not b.cached(_config(), need_llm)
+        except Exception:
+            return False
+
     @property
     def transcriber_loaded(self):
         return self.backend.stt_loaded

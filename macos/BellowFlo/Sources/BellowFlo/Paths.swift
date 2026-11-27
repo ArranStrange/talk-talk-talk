@@ -5,7 +5,13 @@ import Foundation
 /// build still works without configuration.
 enum Paths {
     /// The engine: code and, in a source checkout, its venv. Never written.
+    /// A packaged app carries its own in Resources/engine, which wins: the
+    /// download must not depend on anything installed beside it.
     static let kokoroDir: String = {
+        if let res = Bundle.main.resourcePath {
+            let bundled = res + "/engine"
+            if FileManager.default.fileExists(atPath: bundled + "/daemon.py") { return bundled }
+        }
         if let d = UserDefaults.standard.string(forKey: "kokoroDir"),
            FileManager.default.fileExists(atPath: d) {
             return d
@@ -49,7 +55,17 @@ enum Paths {
     static var daemonLog: String { dataDir + "/daemon.log" }
     static var tldrScript: String { kokoroDir + "/tldr.py" }
     static var daemonScript: String { kokoroDir + "/daemon.py" }
-    static var venvPython: String { kokoroDir + "/venv/bin/python" }
+    /// The bundled runtime (a standalone Python with the packages installed
+    /// into it) in a packaged app, else the source install's venv.
+    static var venvPython: String {
+        if let env = ProcessInfo.processInfo.environment["BELLOWFLO_PYTHON"], !env.isEmpty {
+            return env
+        }
+        let runtime = kokoroDir + "/runtime/bin/python3"
+        if FileManager.default.isExecutableFile(atPath: runtime) { return runtime }
+        return kokoroDir + "/venv/bin/python"
+    }
+    static var isPackaged: Bool { kokoroDir.hasPrefix(Bundle.main.bundlePath) }
 
     static func read(_ path: String) -> String {
         (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""

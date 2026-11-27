@@ -28,7 +28,11 @@ final class Tldr {
             return
         }
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: Paths.tldrScript)
+        // Through the engine's own Python, not the script's #! line: on a Mac
+        // without the developer tools, /usr/bin/python3 is only an installer
+        // prompt, and tldr.py needs the engine's modules beside it anyway.
+        p.executableURL = URL(fileURLWithPath: Paths.venvPython)
+        p.arguments = [Paths.tldrScript]
         p.standardInput = input
         let out = Pipe(), err = Pipe()
         p.standardOutput = out

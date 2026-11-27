@@ -4,10 +4,10 @@ A system tray app for Windows 10 and 11 that matches the macOS menu bar app. It 
 engine (`../kokoro`), so voices, TL;DR, read-along and dictation behave the
 same on both platforms.
 
-**Status: needs testing on Windows.** It compiles and its engine client has
-been tested against the real daemon, but none of the window, hotkey,
-microphone or clipboard code has run on Windows yet. There is no end-user
-installer yet. That is the next stage, so for now you need a developer setup:
+Most people should use the installer from the
+[Releases page](https://github.com/ArranStrange/talk-talk-talk/releases),
+which has everything inside (see the main README). The rest of this page
+is for building it yourself.
 
 ## Set up from source
 
@@ -108,9 +108,17 @@ The app looks in these places, in order:
 Python is taken from `BELLOWFLO_PYTHON` if set, otherwise from
 `<engine>\venv\Scripts\python.exe`.
 
+## Building the installer
+
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\package.ps1 -Version 1.2.3
+```
+
+This needs the .NET 10 SDK, Python, the Visual Studio Build Tools (because
+llama-cpp-python compiles) and Inno Setup 6. CI builds it on every pull
+request; see [packaging](../packaging/README.md).
+
 ## Not yet done
 
-- An installer that bundles Python, the engine and the models, plus code
-  signing. That is stage 3.
 - Hooking up the agent hooks (Claude Code, Codex, Cursor). The scripts
   are already cross-platform, but nothing installs them on Windows yet.

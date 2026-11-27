@@ -24,3 +24,6 @@ kokoro/dictionary.txt
 # Windows build output
 windows/BellowFlo/bin/
 windows/BellowFlo/obj/
+
+# Packaged builds
+dist/

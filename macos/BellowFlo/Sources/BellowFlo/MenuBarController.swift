@@ -19,7 +19,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private static let glyph: [String: String] = [
         "idle": "◍", "loading": "◐", "synthesizing": "◐", "summarising": "◓",
         "playing": "◉", "paused": "◑", "ready": "◈",
-        "listening": "●", "transcribing": "◐",
+        "listening": "●", "transcribing": "◐", "downloading": "◐",
     ]
     private static let colors: [String: NSColor] = [
         "idle":         NSColor(white: 0.55, alpha: 1),
@@ -31,12 +31,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         "ready":        NSColor(srgbRed: 0.30, green: 0.50, blue: 0.95, alpha: 1),
         "listening":    NSColor(srgbRed: 0.95, green: 0.30, blue: 0.30, alpha: 1),
         "transcribing": NSColor(srgbRed: 0.95, green: 0.60, blue: 0.10, alpha: 1),
+        "downloading":  NSColor(srgbRed: 0.95, green: 0.60, blue: 0.10, alpha: 1),
     ]
     private static let stateLabel: [String: String] = [
         "idle": "Idle", "loading": "Loading model…", "synthesizing": "Preparing…",
         "playing": "Speaking", "paused": "Paused", "ready": "Reply ready",
         "summarising": "Summarising…", "listening": "Listening…",
-        "transcribing": "Transcribing…",
+        "transcribing": "Transcribing…", "downloading": "Downloading voices (first run)…",
     ]
 
     private static let voices: [(String, [String], String)] = [

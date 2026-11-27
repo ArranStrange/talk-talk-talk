@@ -101,8 +101,15 @@ final class DictationController {
         // Load the models while the key is held, so the wait after release
         // is transcription alone. The frontmost app goes along so the engine
         // can pre-cache the matching prompt prefix too.
-        Daemon.send(["cmd": "dictation_warm",
-                     "context": NSWorkspace.shared.frontmostApplication?.localizedName ?? ""])
+        Daemon.request(["cmd": "dictation_warm",
+                        "context": NSWorkspace.shared.frontmostApplication?.localizedName ?? ""]) { reply in
+            // The first dictation on a new install waits for a one-off
+            // download; say so, or the wait looks like a hang.
+            if reply?["downloading"] as? Bool == true {
+                Hud.shared.show("Downloading the dictation models (about 3 GB, once).\n"
+                                + "Your first dictation will finish when it is done.", seconds: 6)
+            }
+        }
         // Speech from the speakers would otherwise end up in the transcript.
         if coord?.state == "playing" {
             pausedSpeech = true

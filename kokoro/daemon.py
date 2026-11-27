@@ -116,6 +116,16 @@ def set_state(state):
 
 set_state("loading")
 
+# A packaged build ships the voice models; a source install fetches them in
+# install.sh. If they are missing anyway (deleted, or a slimmed package),
+# fetch them now rather than failing: the apps keep waiting for as long as
+# the state says "downloading".
+if bf_paths.missing_models():
+    set_state("downloading")
+    print(f"downloading models: {', '.join(bf_paths.missing_models())}", flush=True)
+    bf_paths.download_models()
+    set_state("loading")
+
 import numpy as np
 import onnxruntime as ort
 import sounddevice as sd
@@ -1034,10 +1044,15 @@ def handle(req):
         import dictate
         # The app sends the frontmost app's name so the matching prompt
         # prefix is cached while the key is still held.
-        threading.Thread(target=dictate.engine().warm,
+        eng = dictate.engine()
+        # Said before the load starts, so the app can tell the user that the
+        # first dictation is waiting on a one-off download, not stuck.
+        downloading = eng.needs_download()
+        threading.Thread(target=eng.warm,
                          kwargs={"context": str(req.get("context") or "")},
                          daemon=True).start()
-        return {"ok": True, "msg": "warming"}
+        return {"ok": True, "msg": "downloading" if downloading else "warming",
+                "downloading": downloading}
     if cmd == "align_warm":
         import dictate
         threading.Thread(target=dictate.engine().warm, kwargs={"need_llm": False},

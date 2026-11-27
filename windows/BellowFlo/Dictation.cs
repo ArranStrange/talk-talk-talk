@@ -109,7 +109,16 @@ sealed class Dictation : IDisposable
         announced = true;
         // Load the models while the key is held, so the wait after release
         // is transcription alone.
-        context.ContinueWith(t => Daemon.Send(new JsonObject { ["cmd"] = "dictation_warm", ["context"] = t.Result }));
+        context.ContinueWith(t => Daemon.Request(
+            new JsonObject { ["cmd"] = "dictation_warm", ["context"] = t.Result },
+            reply =>
+            {
+                // The first dictation on a new install waits for a one-off
+                // download; say so, or the wait looks like a hang.
+                if (reply?["downloading"] is JsonValue d && d.TryGetValue<bool>(out var yes) && yes)
+                    Hud.Show("Downloading the dictation models (about 3 GB, once).\n" +
+                             "Your first dictation will finish when it is done.", 6);
+            }, timeoutMs: 10000));
         // Speech from the speakers would otherwise end up in the transcript.
         if (coord.State == "playing")
         {
